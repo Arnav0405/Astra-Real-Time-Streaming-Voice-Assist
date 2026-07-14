@@ -1,0 +1,43 @@
+# macOS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Go
+services/backend/bin/
+*.test
+*.out
+coverage.html
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+
+# ML artifacts — datasets and checkpoints never belong in git
+services/ml/datasets/*
+!services/ml/datasets/.gitkeep
+*.ckpt
+*.pt
+*.pth
+runs/
+wandb/
+
+# Exported models are tracked deliberately in assets/models/ — ignore strays elsewhere
+services/ml/**/*.onnx
+
+# Env
+.env
+.env.*
+
+# Claude Stuff
+CONTEXT.md
+docs/
