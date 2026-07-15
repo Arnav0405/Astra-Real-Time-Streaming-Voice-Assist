@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import tarfile
@@ -28,6 +29,19 @@ LIBRISPEECH_URLS = [
 RIRS_URL = "https://www.openslr.org/resources/28/rirs_noises.zip"
 RECIPE_REPO = "https://github.com/speechbrain/speechbrain"
 RECIPE_PATH = "recipes/LibriParty/generate_dataset"
+
+# ponytail: works around a Windows-only speechbrain bug (see _sb_patch/sitecustomize.py)
+# where a missing optional dep like k2 crashes unrelated lazy imports. Remove this + the
+# _sb_patch dir once speechbrain fixes the endswith("/inspect.py") check upstream.
+_SB_PATCH_DIR = Path(__file__).parent / "_sb_patch"
+
+
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        filter(None, [str(_SB_PATCH_DIR), env.get("PYTHONPATH")])
+    )
+    return env
 
 
 def _fetch(url: str, dest: Path) -> Path:
@@ -104,6 +118,7 @@ def generate(config_path: Path) -> None:
         ],
         cwd=recipe,
         check=True,
+        env=_subprocess_env(),
     )
     print(f"generated LibriParty dataset at {out}")
 
