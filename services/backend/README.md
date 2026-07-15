@@ -23,8 +23,18 @@ tests/      integration tests (unit tests live next to the code)
 ## Notes
 
 - Module: `github.com/arnav/astra/services/backend`
-- No `go.sum` yet — the module has zero dependencies. It appears with the first `go get`.
+- Generated protobuf code lives in `internal/pb/` and is committed; regenerate with `make proto` after editing `proto/astra/v1/astra.proto`.
 
 ## Development
 
 From the repo root: `make format`, `make lint`, `make test`.
+
+Run the server: `go run ./cmd/astra` (default `-addr :8080`, WebSocket endpoint at `/`).
+
+Proto codegen prerequisite (once):
+
+```sh
+go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+```
+
+`protoc` itself comes from Homebrew (`brew install protobuf`).

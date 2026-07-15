@@ -24,9 +24,13 @@ ifneq ($(GO_FILES),)
 endif
 	cd $(ML_DIR) && uv run pytest; status=$$?; test $$status -eq 0 -o $$status -eq 5
 
-# ponytail: placeholder until proto/ has schemas — then wire protoc + protoc-gen-go
+# Requires protoc + protoc-gen-go (go install google.golang.org/protobuf/cmd/protoc-gen-go@latest)
 proto:
-	@echo "proto: no schemas in proto/ yet — nothing to generate"
+	PATH="$$PATH:$$(go env GOPATH)/bin" protoc \
+		--proto_path=proto \
+		--go_out=$(GO_DIR)/internal/pb \
+		--go_opt=module=github.com/arnav/astra/services/backend/internal/pb \
+		proto/astra/v1/astra.proto
 
 clean:
 	rm -rf $(GO_DIR)/bin $(ML_DIR)/.pytest_cache $(ML_DIR)/.ruff_cache

@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+package astra.v1;
+
+option go_package = "github.com/arnav/astra/services/backend/internal/pb";
+
+// Client -> server envelope. Exactly one StreamStart per connection,
+// then AudioFrames in seq order, then an optional StreamStop.
+message ClientMessage {
+  oneof msg {
+    StreamStart stream_start = 1;
+    AudioFrame audio_frame = 2;
+    StreamStop stream_stop = 3;
+  }
+}
+
+// Declares the audio format for the Stream. The server accepts exactly
+// 16000 Hz / 1 channel / 16-bit signed LE PCM / 20 ms frames and rejects
+// anything else — fields exist for validation, not negotiation.
+message StreamStart {
+  uint32 sample_rate_hz = 1;
+  uint32 channels = 2;
+  uint32 bits_per_sample = 3;
+  uint32 frame_duration_ms = 4;
+}
+
+// One Frame of PCM audio. pcm must be exactly 640 bytes
+// (320 samples of s16le at 16 kHz = 20 ms).
+message AudioFrame {
+  uint64 seq = 1; // starts at 0, increments by 1 per frame
+  bytes pcm = 2;
+}
+
+message StreamStop {}
+
+// Server -> client envelope.
+message ServerMessage {
+  oneof msg {
+    StreamStarted stream_started = 1;
+    Error error = 2;
+  }
+}
+
+message StreamStarted {
+  string stream_id = 1;
+}
+
+// Sent once on any protocol violation; the connection closes after.
+message Error {
+  string code = 1;
+  string message = 2;
+}
