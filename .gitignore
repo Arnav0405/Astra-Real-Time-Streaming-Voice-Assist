@@ -29,7 +29,6 @@ services/ml/datasets/*
 *.pt
 *.pth
 runs/
-wandb/
 
 # Exported models are tracked deliberately in assets/models/ — ignore strays elsewhere
 services/ml/**/*.onnx

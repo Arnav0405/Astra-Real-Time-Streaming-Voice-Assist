@@ -14,15 +14,27 @@ This service never serves traffic. See [docs/architecture.md](../../docs/archite
 ## Layout
 
 ```
-audio/       audio processing utilities (feature extraction, resampling)
-datasets/    local dataset storage (gitignored) and dataset definitions
-models/      model architectures
-  vad/         voice activity detection
-  wakeword/    wake word detection
-training/    training loops and experiment configs
-evaluation/  metrics and evaluation harnesses
-export/      ONNX export and validation
-tests/       test suite
+src/astra_ml/
+  audio/       audio processing (DFT-matmul log-mel frontend)
+  data/        dataset code: LibriParty labels/Dataset, CHiME manifests, generation wrapper
+  models/      model architectures (vad.py: CNN + GRU + streaming wrapper)
+  training/    plain-PyTorch training loop and YAML config
+  evaluation/  gate metrics, CHiME real-domain eval, Silero baseline
+  export/      ONNX export (+ sidecar JSON) into ../../assets/models/
+configs/     experiment configs (vad_v1.yaml)
+datasets/    local dataset storage (gitignored)
+tests/       dataset-free test suite (runs anywhere)
+```
+
+## VAD pipeline (GPU machine)
+
+```sh
+uv run python -m astra_ml.data.chime --chime-root datasets/chime_home --out datasets/chime_prepared
+uv run python -m astra_ml.data.generate --config configs/vad_v1.yaml   # downloads + generates LibriParty
+uv run python -m astra_ml.training.train --config configs/vad_v1.yaml  # tensorboard --logdir runs/vad
+uv run python -m astra_ml.evaluation.eval --config configs/vad_v1.yaml --checkpoint runs/vad/best.pt
+uv run python -m astra_ml.evaluation.chime_eval --config configs/vad_v1.yaml --checkpoint runs/vad/best.pt --threshold <from eval_report.json>
+uv run python -m astra_ml.export.export --checkpoint runs/vad/best.pt --threshold <same>
 ```
 
 ## Setup

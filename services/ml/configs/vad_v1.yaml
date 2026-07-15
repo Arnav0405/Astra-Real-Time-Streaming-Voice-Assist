@@ -1,0 +1,18 @@
+# All paths relative to services/ml (override on the GPU machine if layouts differ).
+data:
+  sources_root: datasets/source            # LibriSpeech + RIRS_NOISES download target
+  chime_root: datasets/chime_home
+  chime_prepared: datasets/chime_prepared  # backgrounds + eval manifests (data.chime output)
+  libriparty_out: datasets/libriparty      # generated mixtures + metadata
+  recipe_dir: datasets/_speechbrain        # sparse clone of the SpeechBrain recipe
+
+training:
+  crop_frames: 200        # 4 s sequences
+  batch_size: 64
+  lr: 1.0e-3
+  epochs: 50
+  patience: 7
+  grad_clip: 5.0
+  num_workers: 4
+  seed: 1234
+  runs_dir: runs/vad
