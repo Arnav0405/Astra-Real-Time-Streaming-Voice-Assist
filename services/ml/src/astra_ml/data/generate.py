@@ -110,6 +110,10 @@ def generate(config_path: Path) -> None:
             sys.executable,
             "create_custom_dataset.py",
             "dataset.yaml",
+            # ponytail: sessions capped below our 60 s CHiME backgrounds (recipe asserts
+            # background_len >= max_length). To get longer sessions, raise BACKGROUND_GROUP
+            # in chime.py and this together.
+            "--max_length=55",
             f"--librispeech_root={ml_root / cfg.sources_root / 'LibriSpeech'}",
             f"--rirs_noises_root={ml_root / cfg.sources_root / 'RIRS_NOISES'}",
             f"--backgrounds_root={backgrounds}",
