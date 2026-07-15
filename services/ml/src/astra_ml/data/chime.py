@@ -84,10 +84,12 @@ def prepare(chime_root: Path, out: Path) -> None:
     shutil.rmtree(backgrounds_dir, ignore_errors=True)
     n_bg = build_backgrounds(chime_root, backgrounds_dir, dev_nonspeech)
 
+    write_manifest(out / "dev_nonspeech.csv", chime_root, dev_nonspeech)
     write_manifest(out / "eval_speech.csv", chime_root, ev_speech)
     write_manifest(out / "eval_nonspeech.csv", chime_root, ev_nonspeech)
     print(
         f"backgrounds: {n_bg} × 60 s from {len(dev_nonspeech)} dev non-speech chunks\n"
+        f"dev: {len(dev_nonspeech)} non-speech chunks (augmentation manifest)\n"
         f"eval: {len(ev_speech)} speech / {len(ev_nonspeech)} non-speech chunks"
     )
 

@@ -10,9 +10,10 @@ from pathlib import Path
 
 import torch
 from sklearn.metrics import roc_auc_score
-from torch.utils.data import DataLoader
+from torch.utils.data import ConcatDataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from astra_ml.data.augment import ChimeNegatives, NoiseAugment
 from astra_ml.data.libriparty import LibriPartyDataset
 from astra_ml.models.vad import VadModel
 from astra_ml.training.config import Config, load_config
@@ -32,6 +33,18 @@ def make_loader(cfg: Config, split: str, shuffle: bool) -> DataLoader:
         cfg.data.mixtures_dir(split),
         crop_frames=cfg.training.crop_frames,
     )
+    aug, manifest = cfg.augment, cfg.data.chime_prepared / "dev_nonspeech.csv"
+    if split == "train" and aug.chime_noise_prob > 0:
+        dataset = NoiseAugment(dataset, manifest, aug.chime_noise_prob, aug.snr_db_range)
+    if split in ("train", "dev") and aug.negatives_fraction > 0:
+        negatives = ChimeNegatives(
+            manifest,
+            cfg.training.crop_frames,
+            count=int(len(dataset) * aug.negatives_fraction),
+            seed=cfg.training.seed,
+            reverse=(split == "dev"),
+        )
+        dataset = ConcatDataset([dataset, negatives])
     return DataLoader(
         dataset,
         batch_size=cfg.training.batch_size,

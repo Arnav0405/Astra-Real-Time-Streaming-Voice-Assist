@@ -6,6 +6,11 @@ data:
   libriparty_out: datasets/libriparty      # generated mixtures + metadata
   recipe_dir: datasets/_speechbrain        # sparse clone of the SpeechBrain recipe
 
+augment:                    # CHiME-Home dev non-speech; all knobs 0 / section absent → no-op
+  chime_noise_prob: 0.3     # fraction of train crops that get additive CHiME noise
+  snr_db_range: [0.0, 20.0]
+  negatives_fraction: 0.1   # extra all-zero-label CHiME crops, relative to split size
+
 training:
   crop_frames: 200        # 4 s sequences
   batch_size: 64

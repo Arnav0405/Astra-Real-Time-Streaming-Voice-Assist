@@ -46,9 +46,17 @@ class TrainingConfig:
 
 
 @dataclass
+class AugmentConfig:
+    chime_noise_prob: float = 0.0
+    snr_db_range: tuple[float, float] = (0.0, 20.0)
+    negatives_fraction: float = 0.0
+
+
+@dataclass
 class Config:
     data: DataConfig
     training: TrainingConfig
+    augment: AugmentConfig
 
 
 def load_config(path: Path) -> Config:
@@ -56,4 +64,9 @@ def load_config(path: Path) -> Config:
     data = {k: Path(v) for k, v in raw["data"].items()}
     t = raw["training"]
     t["runs_dir"] = Path(t["runs_dir"])
-    return Config(data=DataConfig(**data), training=TrainingConfig(**t))
+    a = raw.get("augment", {})
+    if "snr_db_range" in a:
+        a["snr_db_range"] = tuple(a["snr_db_range"])
+    return Config(
+        data=DataConfig(**data), training=TrainingConfig(**t), augment=AugmentConfig(**a)
+    )
