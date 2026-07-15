@@ -1,0 +1,11 @@
+{
+  "sample_rate": 16000,
+  "frame_samples": 320,
+  "state_shape": [
+    1,
+    1,
+    64
+  ],
+  "recommended_threshold": 0.7884401082992554,
+  "opset": 17
+}
