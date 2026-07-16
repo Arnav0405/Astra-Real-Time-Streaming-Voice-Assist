@@ -1,0 +1,6 @@
+{
+  "fa_rate_nonspeech": 0.012435897435897436,
+  "gate_fa_below_5pct": true,
+  "speech_chunk_detection": 0.7195121951219512,
+  "threshold": 0.6773818731307983
+}

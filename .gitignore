@@ -28,7 +28,6 @@ services/ml/datasets/*
 *.ckpt
 *.pt
 *.pth
-runs/
 
 # Exported models are tracked deliberately in assets/models/ — ignore strays elsewhere
 services/ml/**/*.onnx
