@@ -1,8 +1,14 @@
 """Export the VAD model to ONNX + sidecar metadata for the Go runtime.
 
+If a tune report (from astra_ml.evaluation.tune_postproc) exists, its best
+onset threshold and postproc knobs are written into the sidecar; otherwise
+--threshold and DEFAULT_POSTPROC apply. The postproc state machine itself
+stays out of the ONNX graph by design (decision #10) — the Go runtime owns it.
+
 Usage:
     uv run python -m astra_ml.export.export [--checkpoint runs/vad/best.pt] \
-        [--out ../../assets/models/vad] [--threshold 0.5]
+        [--out ../../assets/models/vad] [--threshold 0.5] \
+        [--tune-report runs/vad/tune_report.json]
 """
 
 import argparse
@@ -26,7 +32,19 @@ DEFAULT_POSTPROC = {
 }
 
 
-def export(model: VadModel, out_dir: Path, threshold: float, name: str = "vad_v1") -> Path:
+def load_tuned(report_path: Path) -> tuple[float, dict]:
+    """Best (onset threshold, postproc knobs) from a tune_postproc report."""
+    best = json.loads(report_path.read_text())["best"]
+    return best["onset_threshold"], {k: best[k] for k in DEFAULT_POSTPROC}
+
+
+def export(
+    model: VadModel,
+    out_dir: Path,
+    threshold: float,
+    postproc: dict | None = None,
+    name: str = "vad_v1",
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     onnx_path = out_dir / f"{name}.onnx"
     wrapper = StreamingVad(model).eval()
@@ -44,7 +62,7 @@ def export(model: VadModel, out_dir: Path, threshold: float, name: str = "vad_v1
         "frame_samples": FRAME_SAMPLES,
         "state_shape": [1, 1, HIDDEN_SIZE],
         "recommended_threshold": threshold,
-        "postproc": DEFAULT_POSTPROC,
+        "postproc": postproc if postproc is not None else DEFAULT_POSTPROC,
         "opset": OPSET,
     }
     (out_dir / f"{name}.json").write_text(json.dumps(sidecar, indent=2) + "\n")
@@ -56,13 +74,21 @@ def main() -> None:
     parser.add_argument("--checkpoint", type=Path, default=None)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--tune-report", type=Path, default=Path("runs/vad/tune_report.json"))
     args = parser.parse_args()
+
+    if args.tune_report.exists():
+        threshold, postproc = load_tuned(args.tune_report)
+        print(f"tuned postproc ← {args.tune_report}")
+    else:
+        threshold, postproc = args.threshold, None
+        print(f"no tune report at {args.tune_report}; using --threshold and defaults")
 
     model = VadModel()
     if args.checkpoint is not None:
         model.load_state_dict(torch.load(args.checkpoint, map_location="cpu"))
     model.eval()
-    path = export(model, args.out, args.threshold)
+    path = export(model, args.out, threshold, postproc)
     print(f"exported {path}")
 
 
