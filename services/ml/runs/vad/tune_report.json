@@ -1,17 +1,19 @@
 {
   "best": {
-    "onset_threshold": 0.7,
-    "offset_threshold": 0.25,
-    "min_speech_frames": 3,
-    "min_silence_frames": 35,
+    "onset_threshold": 0.77,
+    "offset_threshold": 0.09,
+    "min_speech_frames": 4,
+    "min_silence_frames": 34,
     "segment_recall": 0.9510022271714922,
-    "false_alarms_per_hour": 64.28571428571429,
-    "median_onset_latency_ms": 0.0,
-    "p90_onset_latency_ms": 480.0,
+    "false_alarms_per_hour": 26.2987012987013,
+    "median_onset_latency_ms": 420.0,
+    "p90_onset_latency_ms": 660.0,
+    "measurable_onsets": 87,
+    "chunk_accuracy_31ms": 0.9030881908788886,
     "true_segments": 449,
     "audio_hours": 0.6844444444444444
   },
   "min_recall": 0.95,
   "split": "dev",
-  "combos_scored": 492
+  "combos_scored": 480
 }
