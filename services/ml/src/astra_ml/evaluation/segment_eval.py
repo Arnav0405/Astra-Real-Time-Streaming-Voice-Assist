@@ -62,20 +62,18 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
     }
 
 
-@torch.no_grad()
-def evaluate(model: VadModel, loader, device, cfg: PostprocConfig) -> dict:
+def score_windows(windows, cfg: PostprocConfig) -> dict:
+    """Aggregate segment metrics over (probs, labels) window pairs."""
     matched = total_true = false_alarms = total_frames = 0
     latencies: list[int] = []
-    for pcm, target in loader:
-        probs = model(pcm.to(device)).cpu().numpy()
-        for window_probs, window_labels in zip(probs, target.numpy(), strict=True):
-            true_segs = label_segments(window_labels)
-            m = segment_metrics(true_segs, segments(window_probs, cfg))
-            total_true += len(true_segs)
-            matched += m["matched"]
-            false_alarms += m["false_alarms"]
-            latencies += m["onset_latencies"]
-            total_frames += len(window_probs)
+    for window_probs, window_labels in windows:
+        true_segs = label_segments(window_labels)
+        m = segment_metrics(true_segs, segments(window_probs, cfg))
+        total_true += len(true_segs)
+        matched += m["matched"]
+        false_alarms += m["false_alarms"]
+        latencies += m["onset_latencies"]
+        total_frames += len(window_probs)
     hours = total_frames * FRAME_MS / 1000 / 3600
     lat_ms = np.array(latencies) * FRAME_MS
     return {
@@ -86,6 +84,20 @@ def evaluate(model: VadModel, loader, device, cfg: PostprocConfig) -> dict:
         "true_segments": total_true,
         "audio_hours": hours,
     }
+
+
+@torch.no_grad()
+def collect_windows(model: VadModel, loader, device) -> list[tuple[np.ndarray, np.ndarray]]:
+    """Run inference once, return per-window (probs, labels) pairs."""
+    windows = []
+    for pcm, target in loader:
+        probs = model(pcm.to(device)).cpu().numpy()
+        windows += list(zip(probs, target.numpy(), strict=True))
+    return windows
+
+
+def evaluate(model: VadModel, loader, device, cfg: PostprocConfig) -> dict:
+    return score_windows(collect_windows(model, loader, device), cfg)
 
 
 def main() -> None:
