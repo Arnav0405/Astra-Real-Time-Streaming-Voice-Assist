@@ -27,6 +27,7 @@ from astra_ml.training.train import make_loader, pick_device
 REPO_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_SIDECAR = REPO_ROOT / "assets" / "models" / "vad" / "vad_v1.json"
 FRAME_MS = FRAME_SAMPLES / 16_000 * 1000
+CHUNK_MS = 31
 
 
 def label_segments(labels: np.ndarray) -> list[tuple[int, int]]:
@@ -67,6 +68,27 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
     }
 
 
+def _chunk_counts(
+    pred_segs: list[tuple[int, int]], labels: np.ndarray, chunk_ms: float
+) -> tuple[int, int]:
+    """(correct, total) chunks; decision and label taken at the frame containing
+    each chunk's center — same center rule as frame labels and the Silero baseline."""
+    mask = np.zeros(len(labels), dtype=bool)
+    for s, e in pred_segs:
+        mask[s:e] = True
+    n_chunks = int(len(labels) * FRAME_MS // chunk_ms)
+    centers_ms = (np.arange(n_chunks) + 0.5) * chunk_ms
+    idx = (centers_ms // FRAME_MS).astype(int)
+    return int((mask[idx] == labels.astype(bool)[idx]).sum()), n_chunks
+
+
+def chunk_accuracy(
+    pred_segs: list[tuple[int, int]], labels: np.ndarray, chunk_ms: float = CHUNK_MS
+) -> float:
+    correct, total = _chunk_counts(pred_segs, labels, chunk_ms)
+    return correct / total
+
+
 def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
     """One row per true segment for tail diagnosis.
 
@@ -104,15 +126,20 @@ def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
 def score_windows(windows, cfg: PostprocConfig) -> dict:
     """Aggregate segment metrics over (probs, labels) window pairs."""
     matched = total_true = false_alarms = total_frames = 0
+    chunk_correct = chunk_total = 0
     latencies: list[int] = []
     for window_probs, window_labels in windows:
         true_segs = label_segments(window_labels)
-        m = segment_metrics(true_segs, segments(window_probs, cfg))
+        preds = segments(window_probs, cfg)
+        m = segment_metrics(true_segs, preds)
         total_true += len(true_segs)
         matched += m["matched"]
         false_alarms += m["false_alarms"]
         latencies += m["onset_latencies"]
         total_frames += len(window_probs)
+        correct, total = _chunk_counts(preds, window_labels, CHUNK_MS)
+        chunk_correct += correct
+        chunk_total += total
     hours = total_frames * FRAME_MS / 1000 / 3600
     lat_ms = np.array(latencies) * FRAME_MS
     return {
@@ -121,6 +148,7 @@ def score_windows(windows, cfg: PostprocConfig) -> dict:
         "median_onset_latency_ms": float(np.median(lat_ms)) if latencies else None,
         "p90_onset_latency_ms": float(np.percentile(lat_ms, 90)) if latencies else None,
         "measurable_onsets": len(latencies),
+        f"chunk_accuracy_{CHUNK_MS}ms": chunk_correct / chunk_total if chunk_total else None,
         "true_segments": total_true,
         "audio_hours": hours,
     }

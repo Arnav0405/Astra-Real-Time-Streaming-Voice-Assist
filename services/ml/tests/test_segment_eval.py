@@ -1,6 +1,7 @@
 import numpy as np
 
 from astra_ml.evaluation.segment_eval import (
+    chunk_accuracy,
     label_segments,
     latency_rows,
     score_windows,
@@ -121,6 +122,26 @@ def test_latency_rows_one_per_true_segment():
             "latency_ms": None,
         },
     ]
+
+
+def test_chunk_accuracy_perfect_and_all_wrong():
+    # 100 frames = 2000 ms → 64 full 31 ms chunks
+    labels = np.zeros(100)
+    labels[:50] = 1  # speech for first 1000 ms
+    # perfect prediction
+    assert chunk_accuracy([(0, 50)], labels, chunk_ms=31) == 1.0
+    # predict nothing: only the 32 chunks with center >= 1000 ms are correct
+    assert chunk_accuracy([], labels, chunk_ms=31) == 32 / 64
+
+
+def test_score_windows_reports_chunk_accuracy():
+    cfg = PostprocConfig(
+        onset_threshold=0.7, offset_threshold=0.4, min_speech_frames=3, min_silence_frames=5
+    )
+    probs = np.full(100, 0.1)
+    labels = np.zeros(100)
+    report = score_windows([(probs, labels)], cfg)
+    assert report["chunk_accuracy_31ms"] == 1.0
 
 
 def test_latency_rows_classifies_carried_and_pre_active():
