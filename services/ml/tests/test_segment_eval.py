@@ -1,6 +1,11 @@
 import numpy as np
 
-from astra_ml.evaluation.segment_eval import label_segments, score_windows, segment_metrics
+from astra_ml.evaluation.segment_eval import (
+    label_segments,
+    latency_rows,
+    score_windows,
+    segment_metrics,
+)
 from astra_ml.postproc import PostprocConfig
 
 
@@ -64,3 +69,39 @@ def test_score_windows_aggregates_across_windows():
     assert report["median_onset_latency_ms"] == 0.0
     # 100 frames * 20 ms = 2 s of audio; 1 FA
     assert report["false_alarms_per_hour"] == 1 / (100 * 0.02 / 3600)
+
+
+def test_latency_rows_one_per_true_segment():
+    cfg = PostprocConfig(
+        onset_threshold=0.7, offset_threshold=0.4, min_speech_frames=3, min_silence_frames=5
+    )
+    # window 0: detected 4 frames late
+    probs1 = np.full(50, 0.1)
+    probs1[14:30] = 0.9
+    labels1 = np.zeros(50)
+    labels1[10:30] = 1
+    # window 1: missed segment + false alarm (FA gets no row)
+    probs2 = np.full(50, 0.1)
+    probs2[40:46] = 0.9
+    labels2 = np.zeros(50)
+    labels2[5:15] = 1
+
+    rows = latency_rows([(probs1, labels1), (probs2, labels2)], cfg)
+    assert rows == [
+        {
+            "window": 0,
+            "true_start": 10,
+            "true_end": 30,
+            "pred_start": 14,
+            "latency_frames": 4,
+            "latency_ms": 80.0,
+        },
+        {
+            "window": 1,
+            "true_start": 5,
+            "true_end": 15,
+            "pred_start": None,
+            "latency_frames": None,
+            "latency_ms": None,
+        },
+    ]

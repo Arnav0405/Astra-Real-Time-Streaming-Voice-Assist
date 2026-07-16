@@ -11,6 +11,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 from pathlib import Path
 
@@ -62,6 +63,27 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
     }
 
 
+def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
+    """One row per true segment for tail diagnosis; pred_start None = missed."""
+    rows = []
+    for w, (window_probs, window_labels) in enumerate(windows):
+        preds = segments(window_probs, cfg)
+        for t in label_segments(window_labels):
+            hit = next((p for p in preds if _overlaps(t, p)), None)
+            lat = hit[0] - t[0] if hit else None
+            rows.append(
+                {
+                    "window": w,
+                    "true_start": t[0],
+                    "true_end": t[1],
+                    "pred_start": hit[0] if hit else None,
+                    "latency_frames": lat,
+                    "latency_ms": lat * FRAME_MS if lat is not None else None,
+                }
+            )
+    return rows
+
+
 def score_windows(windows, cfg: PostprocConfig) -> dict:
     """Aggregate segment metrics over (probs, labels) window pairs."""
     matched = total_true = false_alarms = total_frames = 0
@@ -96,10 +118,6 @@ def collect_windows(model: VadModel, loader, device) -> list[tuple[np.ndarray, n
     return windows
 
 
-def evaluate(model: VadModel, loader, device, cfg: PostprocConfig) -> dict:
-    return score_windows(collect_windows(model, loader, device), cfg)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("configs/vad_v1.yaml"))
@@ -114,12 +132,29 @@ def main() -> None:
     model.load_state_dict(torch.load(args.checkpoint, map_location=device))
     model.eval()
 
-    report = evaluate(model, make_loader(cfg, "eval", shuffle=False), device, pp_cfg)
+    windows = collect_windows(model, make_loader(cfg, "eval", shuffle=False), device)
+    report = score_windows(windows, pp_cfg)
     report["postproc"] = pp_cfg.__dict__
     out = cfg.training.runs_dir / "segment_report.json"
     out.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report, indent=2))
     print(f"report → {out}")
+
+    rows = latency_rows(windows, pp_cfg)
+    csv_out = cfg.training.runs_dir / "segment_latencies.csv"
+    with open(csv_out, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=rows[0].keys())
+        writer.writeheader()
+        writer.writerows(rows)
+    worst = sorted(
+        (r for r in rows if r["latency_ms"] is not None), key=lambda r: -r["latency_ms"]
+    )[:5]
+    print(f"latencies → {csv_out} ({len(rows)} segments)")
+    for r in worst:
+        print(
+            f"  worst: window {r['window']} frames {r['true_start']}-{r['true_end']} "
+            f"latency {r['latency_ms']:.0f} ms"
+        )
 
 
 if __name__ == "__main__":
