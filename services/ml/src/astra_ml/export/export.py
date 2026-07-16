@@ -17,6 +17,14 @@ OPSET = 17
 REPO_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_OUT = REPO_ROOT / "assets" / "models" / "vad"
 
+# Consumed by astra_ml.postproc (Python reference) and the Go runtime state
+# machine — retune via segment_eval, don't edit ad hoc. Frames are 20 ms.
+DEFAULT_POSTPROC = {
+    "offset_threshold": 0.45,
+    "min_speech_frames": 3,  # 60 ms onset debounce
+    "min_silence_frames": 25,  # 500 ms hangover
+}
+
 
 def export(model: VadModel, out_dir: Path, threshold: float, name: str = "vad_v1") -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -36,6 +44,7 @@ def export(model: VadModel, out_dir: Path, threshold: float, name: str = "vad_v1
         "frame_samples": FRAME_SAMPLES,
         "state_shape": [1, 1, HIDDEN_SIZE],
         "recommended_threshold": threshold,
+        "postproc": DEFAULT_POSTPROC,
         "opset": OPSET,
     }
     (out_dir / f"{name}.json").write_text(json.dumps(sidecar, indent=2) + "\n")

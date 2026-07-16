@@ -7,5 +7,10 @@
     64
   ],
   "recommended_threshold": 0.6773818731307983,
+  "postproc": {
+    "offset_threshold": 0.45,
+    "min_speech_frames": 3,
+    "min_silence_frames": 25
+  },
   "opset": 17
 }
