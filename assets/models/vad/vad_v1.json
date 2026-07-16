@@ -6,11 +6,11 @@
     1,
     64
   ],
-  "recommended_threshold": 0.6773818731307983,
+  "recommended_threshold": 0.7,
   "postproc": {
-    "offset_threshold": 0.45,
+    "offset_threshold": 0.25,
     "min_speech_frames": 3,
-    "min_silence_frames": 25
+    "min_silence_frames": 35
   },
   "opset": 17
 }

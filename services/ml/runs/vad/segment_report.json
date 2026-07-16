@@ -1,14 +1,14 @@
 {
   "segment_recall": 0.9644444444444444,
-  "false_alarms_per_hour": 86.50646950092421,
+  "false_alarms_per_hour": 61.55268022181146,
   "median_onset_latency_ms": 0.0,
-  "p90_onset_latency_ms": 420.0,
+  "p90_onset_latency_ms": 433.9999999999998,
   "true_segments": 450,
   "audio_hours": 0.6011111111111112,
   "postproc": {
-    "onset_threshold": 0.6773818731307983,
-    "offset_threshold": 0.45,
+    "onset_threshold": 0.7,
+    "offset_threshold": 0.25,
     "min_speech_frames": 3,
-    "min_silence_frames": 25
+    "min_silence_frames": 35
   }
 }

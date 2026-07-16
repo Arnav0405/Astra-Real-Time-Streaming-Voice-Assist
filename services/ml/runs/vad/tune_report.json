@@ -1,0 +1,17 @@
+{
+  "best": {
+    "onset_threshold": 0.7,
+    "offset_threshold": 0.25,
+    "min_speech_frames": 3,
+    "min_silence_frames": 35,
+    "segment_recall": 0.9510022271714922,
+    "false_alarms_per_hour": 64.28571428571429,
+    "median_onset_latency_ms": 0.0,
+    "p90_onset_latency_ms": 480.0,
+    "true_segments": 449,
+    "audio_hours": 0.6844444444444444
+  },
+  "min_recall": 0.95,
+  "split": "dev",
+  "combos_scored": 492
+}
