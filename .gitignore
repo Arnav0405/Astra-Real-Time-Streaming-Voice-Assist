@@ -28,6 +28,8 @@ services/ml/datasets/*
 *.ckpt
 *.pt
 *.pth
+services\ml\runs\vad\events.out.tfevents.1784144428.LAPTOP-BN8HL2TP.1316.0
+
 
 # Exported models are tracked deliberately in assets/models/ — ignore strays elsewhere
 services/ml/**/*.onnx
