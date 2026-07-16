@@ -4,6 +4,7 @@
   "median_onset_latency_ms": 400.0,
   "p90_onset_latency_ms": 620.0,
   "measurable_onsets": 87,
+  "chunk_accuracy_31ms": 0.9100717878175644,
   "true_segments": 450,
   "audio_hours": 0.6011111111111112,
   "postproc": {

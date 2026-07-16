@@ -23,10 +23,10 @@ from astra_ml.postproc import PostprocConfig
 from astra_ml.training.config import load_config
 from astra_ml.training.train import make_loader, pick_device
 
-ONSETS = [0.5, 0.55, 0.6, 0.65, 0.677, 0.7, 0.75]
-OFFSETS = [0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
-MIN_SPEECH = [3, 5, 8, 10]
-MIN_SILENCE = [15, 25, 35]
+ONSETS = [0.3, 0.5, 0.55, 0.6, 0.65, 0.677, 0.7]
+OFFSETS = [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5]
+MIN_SPEECH = [2, 3, 5, 20]
+MIN_SILENCE = [25, 35, 40]
 
 
 def make_grid(onsets, offsets, min_speech, min_silence) -> list[PostprocConfig]:
