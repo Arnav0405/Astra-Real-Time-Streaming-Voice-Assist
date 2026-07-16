@@ -42,6 +42,19 @@ def test_onset_latency_from_first_overlapping_prediction():
     assert m["onset_latencies"] == [3]
 
 
+def test_pre_active_prediction_clamps_latency_to_zero():
+    # one pred bridges two utterances; second one must not go negative
+    m = segment_metrics([(10, 20), (40, 50)], [(12, 45)])
+    assert m["onset_latencies"] == [2, 0]
+
+
+def test_carried_segment_excluded_from_latency():
+    # true segment starting at frame 0 = chopped at window edge, onset unmeasurable
+    m = segment_metrics([(0, 20)], [(0, 20)])
+    assert m["matched"] == 1
+    assert m["onset_latencies"] == []
+
+
 def test_no_true_segments():
     m = segment_metrics([], [(5, 8)])
     assert m["recall"] is None
@@ -67,6 +80,7 @@ def test_score_windows_aggregates_across_windows():
     assert report["true_segments"] == 2
     assert report["segment_recall"] == 0.5
     assert report["median_onset_latency_ms"] == 0.0
+    assert report["measurable_onsets"] == 1
     # 100 frames * 20 ms = 2 s of audio; 1 FA
     assert report["false_alarms_per_hour"] == 1 / (100 * 0.02 / 3600)
 
@@ -93,6 +107,7 @@ def test_latency_rows_one_per_true_segment():
             "true_start": 10,
             "true_end": 30,
             "pred_start": 14,
+            "onset_type": "measured",
             "latency_frames": 4,
             "latency_ms": 80.0,
         },
@@ -101,7 +116,24 @@ def test_latency_rows_one_per_true_segment():
             "true_start": 5,
             "true_end": 15,
             "pred_start": None,
+            "onset_type": "missed",
             "latency_frames": None,
             "latency_ms": None,
         },
     ]
+
+
+def test_latency_rows_classifies_carried_and_pre_active():
+    cfg = PostprocConfig(
+        onset_threshold=0.7, offset_threshold=0.4, min_speech_frames=3, min_silence_frames=5
+    )
+    # speech from frame 0 (carried) and a second utterance bridged by hangover
+    probs = np.full(50, 0.9)
+    probs[20:24] = 0.5  # above offset: machine stays in SPEECH across the gap
+    labels = np.ones(50)
+    labels[20:24] = 0
+
+    rows = latency_rows([(probs, labels)], cfg)
+    assert [r["onset_type"] for r in rows] == ["carried", "pre_active"]
+    assert rows[0]["latency_ms"] is None  # unmeasurable
+    assert rows[1]["latency_ms"] == 0.0  # detector already active, clamp

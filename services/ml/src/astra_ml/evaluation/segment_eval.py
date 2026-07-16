@@ -44,8 +44,11 @@ def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
 def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int, int]]) -> dict:
     """Recall over true segments, false-alarm count over preds, onset latency per match.
 
-    A true segment is matched if any prediction overlaps it; latency is measured
-    against the first overlapping prediction (negative = started early).
+    A true segment is matched if any prediction overlaps it. Latency is measured
+    against the first overlapping prediction, clamped at 0 when the detector was
+    already active before the segment began (e.g. one prediction bridging two
+    utterances). Segments starting at frame 0 are chopped at the window edge —
+    their onset is unmeasurable and they are excluded from latencies.
     """
     latencies = []
     matched = 0
@@ -53,7 +56,8 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
         hit = next((p for p in pred_segs if _overlaps(t, p)), None)
         if hit is not None:
             matched += 1
-            latencies.append(hit[0] - t[0])
+            if t[0] > 0:
+                latencies.append(max(hit[0] - t[0], 0))
     false_alarms = sum(1 for p in pred_segs if not any(_overlaps(t, p) for t in true_segs))
     return {
         "recall": matched / len(true_segs) if true_segs else None,
@@ -64,19 +68,32 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
 
 
 def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
-    """One row per true segment for tail diagnosis; pred_start None = missed."""
+    """One row per true segment for tail diagnosis.
+
+    onset_type: "missed" (no overlapping prediction), "carried" (segment starts
+    at the window edge, onset unmeasurable), "pre_active" (detector already in
+    speech before the segment began, latency clamped to 0), "measured".
+    """
     rows = []
     for w, (window_probs, window_labels) in enumerate(windows):
         preds = segments(window_probs, cfg)
         for t in label_segments(window_labels):
             hit = next((p for p in preds if _overlaps(t, p)), None)
-            lat = hit[0] - t[0] if hit else None
+            if hit is None:
+                kind, lat = "missed", None
+            elif t[0] == 0:
+                kind, lat = "carried", None
+            elif hit[0] < t[0]:
+                kind, lat = "pre_active", 0
+            else:
+                kind, lat = "measured", hit[0] - t[0]
             rows.append(
                 {
                     "window": w,
                     "true_start": t[0],
                     "true_end": t[1],
                     "pred_start": hit[0] if hit else None,
+                    "onset_type": kind,
                     "latency_frames": lat,
                     "latency_ms": lat * FRAME_MS if lat is not None else None,
                 }
@@ -103,6 +120,7 @@ def score_windows(windows, cfg: PostprocConfig) -> dict:
         "false_alarms_per_hour": false_alarms / hours,
         "median_onset_latency_ms": float(np.median(lat_ms)) if latencies else None,
         "p90_onset_latency_ms": float(np.percentile(lat_ms, 90)) if latencies else None,
+        "measurable_onsets": len(latencies),
         "true_segments": total_true,
         "audio_hours": hours,
     }
