@@ -1,9 +1,9 @@
 {
   "segment_recall": 0.9644444444444444,
   "false_alarms_per_hour": 11.645101663585951,
-  "median_onset_latency_ms": 360.0,
-  "p90_onset_latency_ms": 620.0,
-  "measurable_onsets": 89,
+  "median_onset_latency_ms": 0.0,
+  "p90_onset_latency_ms": 320.0,
+  "measurable_onsets": 28,
   "chunk_accuracy_31ms": 0.8922609580306352,
   "true_segments": 450,
   "audio_hours": 0.6011111111111112,
