@@ -1,16 +1,16 @@
 {
   "segment_recall": 0.9644444444444444,
-  "false_alarms_per_hour": 61.55268022181146,
-  "median_onset_latency_ms": 400.0,
+  "false_alarms_per_hour": 11.645101663585951,
+  "median_onset_latency_ms": 360.0,
   "p90_onset_latency_ms": 620.0,
-  "measurable_onsets": 87,
-  "chunk_accuracy_31ms": 0.9100717878175644,
+  "measurable_onsets": 89,
+  "chunk_accuracy_31ms": 0.8922609580306352,
   "true_segments": 450,
   "audio_hours": 0.6011111111111112,
   "postproc": {
-    "onset_threshold": 0.7,
-    "offset_threshold": 0.25,
-    "min_speech_frames": 3,
-    "min_silence_frames": 35
+    "onset_threshold": 0.77,
+    "offset_threshold": 0.09,
+    "min_speech_frames": 4,
+    "min_silence_frames": 34
   }
 }
