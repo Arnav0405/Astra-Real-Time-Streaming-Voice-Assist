@@ -62,6 +62,13 @@ def test_no_true_segments():
     assert m["false_alarms"] == 1
 
 
+def test_end_truncated_segment_excluded_from_latency():
+    # true segment runs to the window edge (n_frames=20) — may continue next window
+    m = segment_metrics([(10, 20)], [(13, 20)], n_frames=20)
+    assert m["matched"] == 1
+    assert m["onset_latencies"] == []
+
+
 def test_score_windows_aggregates_across_windows():
     cfg = PostprocConfig(
         onset_threshold=0.7, offset_threshold=0.4, min_speech_frames=3, min_silence_frames=5
@@ -158,3 +165,19 @@ def test_latency_rows_classifies_carried_and_pre_active():
     assert [r["onset_type"] for r in rows] == ["carried", "pre_active"]
     assert rows[0]["latency_ms"] is None  # unmeasurable
     assert rows[1]["latency_ms"] == 0.0  # detector already active, clamp
+
+
+def test_latency_rows_classifies_end_truncated():
+    cfg = PostprocConfig(
+        onset_threshold=0.7, offset_threshold=0.4, min_speech_frames=3, min_silence_frames=5
+    )
+    # speech starts mid-window and runs to the last frame (window length 50)
+    probs = np.full(50, 0.1)
+    probs[30:50] = 0.9
+    labels = np.zeros(50)
+    labels[30:50] = 1
+
+    rows = latency_rows([(probs, labels)], cfg)
+    assert [r["onset_type"] for r in rows] == ["end_truncated"]
+    assert rows[0]["true_end"] == 50
+    assert rows[0]["latency_ms"] is None

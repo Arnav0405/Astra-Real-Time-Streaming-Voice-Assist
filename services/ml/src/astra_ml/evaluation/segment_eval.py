@@ -42,14 +42,20 @@ def _overlaps(a: tuple[int, int], b: tuple[int, int]) -> bool:
     return a[0] < b[1] and b[0] < a[1]
 
 
-def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int, int]]) -> dict:
+def segment_metrics(
+    true_segs: list[tuple[int, int]],
+    pred_segs: list[tuple[int, int]],
+    n_frames: int | None = None,
+) -> dict:
     """Recall over true segments, false-alarm count over preds, onset latency per match.
 
     A true segment is matched if any prediction overlaps it. Latency is measured
     against the first overlapping prediction, clamped at 0 when the detector was
     already active before the segment began (e.g. one prediction bridging two
-    utterances). Segments starting at frame 0 are chopped at the window edge —
-    their onset is unmeasurable and they are excluded from latencies.
+    utterances). Segments starting at frame 0, or ending exactly at `n_frames`,
+    are chopped at the window edge — the eval windows are non-overlapping crops,
+    so these segments may continue in the neighboring window and their observed
+    boundary isn't a real onset/offset. They're excluded from latencies.
     """
     latencies = []
     matched = 0
@@ -58,7 +64,9 @@ def segment_metrics(true_segs: list[tuple[int, int]], pred_segs: list[tuple[int,
         if hit is not None:
             matched += 1
             if t[0] > 0:
-                latencies.append(max(hit[0] - t[0], 0))
+                pre_active = hit[0] < t[0]
+                if pre_active or t[1] != n_frames:
+                    latencies.append(max(hit[0] - t[0], 0))
     false_alarms = sum(1 for p in pred_segs if not any(_overlaps(t, p) for t in true_segs))
     return {
         "recall": matched / len(true_segs) if true_segs else None,
@@ -93,12 +101,16 @@ def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
     """One row per true segment for tail diagnosis.
 
     onset_type: "missed" (no overlapping prediction), "carried" (segment starts
-    at the window edge, onset unmeasurable), "pre_active" (detector already in
-    speech before the segment began, latency clamped to 0), "measured".
+    at the window edge, onset unmeasurable), "end_truncated" (segment ends at
+    the window edge — may continue into the next window, onset still real but
+    reported separately since its full extent is unknown), "pre_active"
+    (detector already in speech before the segment began, latency clamped to
+    0), "measured".
     """
     rows = []
     for w, (window_probs, window_labels) in enumerate(windows):
         preds = segments(window_probs, cfg)
+        n_frames = len(window_labels)
         for t in label_segments(window_labels):
             hit = next((p for p in preds if _overlaps(t, p)), None)
             if hit is None:
@@ -107,6 +119,8 @@ def latency_rows(windows, cfg: PostprocConfig) -> list[dict]:
                 kind, lat = "carried", None
             elif hit[0] < t[0]:
                 kind, lat = "pre_active", 0
+            elif t[1] == n_frames:
+                kind, lat = "end_truncated", None
             else:
                 kind, lat = "measured", hit[0] - t[0]
             rows.append(
@@ -131,7 +145,7 @@ def score_windows(windows, cfg: PostprocConfig) -> dict:
     for window_probs, window_labels in windows:
         true_segs = label_segments(window_labels)
         preds = segments(window_probs, cfg)
-        m = segment_metrics(true_segs, preds)
+        m = segment_metrics(true_segs, preds, n_frames=len(window_labels))
         total_true += len(true_segs)
         matched += m["matched"]
         false_alarms += m["false_alarms"]
