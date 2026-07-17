@@ -6,11 +6,16 @@ import (
 )
 
 // Sink consumes the Frame stream of one session. Run is called in its own
-// goroutine and must drain frames until the channel closes; Wait blocks until
-// Run has finished. VAD (Phase 3) plugs in here.
+// goroutine and must drain frames until the channel closes (even after a
+// fatal error, so the session never blocks); Wait blocks until Run has
+// finished. Fatal is closed if the sink hits an unrecoverable error, after
+// which Err reports it; the session then aborts the stream. The VAD sink
+// (Phase 3) plugs in here.
 type Sink interface {
 	Run(frames <-chan Frame)
 	Wait()
+	Fatal() <-chan struct{}
+	Err() error
 }
 
 // statsSink is the Phase 1 consumer: it counts what arrived and logs a
@@ -40,3 +45,7 @@ func (s *statsSink) Run(frames <-chan Frame) {
 }
 
 func (s *statsSink) Wait() { <-s.done }
+
+// statsSink never fails: a nil channel never fires.
+func (s *statsSink) Fatal() <-chan struct{} { return nil }
+func (s *statsSink) Err() error             { return nil }

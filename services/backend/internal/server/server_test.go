@@ -28,6 +28,9 @@ func (c *captureSink) Run(frames <-chan Frame) {
 
 func (c *captureSink) Wait() { <-c.done }
 
+func (c *captureSink) Fatal() <-chan struct{} { return nil }
+func (c *captureSink) Err() error             { return nil }
+
 func dial(t *testing.T) (*websocket.Conn, *captureSink) {
 	t.Helper()
 	sink := &captureSink{done: make(chan struct{})}

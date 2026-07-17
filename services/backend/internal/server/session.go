@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/coder/websocket"
 	"google.golang.org/protobuf/proto"
@@ -29,6 +30,7 @@ const (
 	codeBadFormat    = "bad_format"     // StreamStart fields != required format
 	codeBadFrameSize = "bad_frame_size" // pcm length != 640
 	codeBadSeq       = "bad_seq"        // seq != previous+1
+	codeInternal     = "internal_error" // server-side failure (e.g. VAD inference broke)
 )
 
 type sessionState int
@@ -55,15 +57,20 @@ type session struct {
 	nextSeq uint64
 	frames  chan Frame
 	sink    Sink
+	cancel  context.CancelFunc
 }
 
 func newSession(conn *websocket.Conn, newSink func(string) Sink) *session {
 	return &session{conn: conn, newSink: newSink, state: awaitingStart}
 }
 
-// run drives the session until the client stops, disconnects, or violates the
-// protocol. It owns the connection and always closes it.
+// run drives the session until the client stops, disconnects, violates the
+// protocol, or the sink fails. It owns the connection and always closes it.
 func (s *session) run(ctx context.Context) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.cancel = cancel
+
 	err := s.loop(ctx)
 
 	if s.frames != nil {
@@ -75,6 +82,15 @@ func (s *session) run(ctx context.Context) {
 	if errors.As(err, &perr) {
 		s.sendError(ctx, perr)
 		s.conn.Close(websocket.StatusPolicyViolation, perr.code)
+		return
+	}
+	if s.sink != nil && s.sink.Err() != nil {
+		// ctx may already be cancelled by the fatal watcher; use a fresh one
+		// so the client still gets the error before close.
+		wctx, wcancel := context.WithTimeout(context.Background(), time.Second)
+		s.sendError(wctx, &protocolError{codeInternal, s.sink.Err().Error()})
+		wcancel()
+		s.conn.Close(websocket.StatusInternalError, codeInternal)
 		return
 	}
 	s.conn.Close(websocket.StatusNormalClosure, "")
@@ -137,6 +153,15 @@ func (s *session) handleStart(ctx context.Context, start *pb.StreamStart) error 
 	s.frames = make(chan Frame, 32)
 	s.sink = s.newSink(streamID)
 	go s.sink.Run(s.frames)
+	// Abort the read loop if the sink dies mid-stream (a nil Fatal channel,
+	// as statsSink returns, never fires).
+	go func() {
+		select {
+		case <-s.sink.Fatal():
+			s.cancel()
+		case <-ctx.Done():
+		}
+	}()
 
 	reply, err := proto.Marshal(&pb.ServerMessage{
 		Msg: &pb.ServerMessage_StreamStarted{StreamStarted: &pb.StreamStarted{StreamId: streamID}},
