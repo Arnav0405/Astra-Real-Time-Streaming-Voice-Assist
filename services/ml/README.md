@@ -37,6 +37,39 @@ uv run python -m astra_ml.evaluation.chime_eval --config configs/vad_v1.yaml --c
 uv run python -m astra_ml.export.export --checkpoint runs/vad/best.pt --threshold <same>
 ```
 
+## Wake word pipeline (Phase 4)
+
+Config: `configs/ww_v1.yaml`. Steps 1, 2 and recording run anywhere; generation
+at scale, precompute, and training belong on the GPU machine.
+
+```sh
+# 1. frontends + piper voice (also prints the ~16 GB ACAV negatives curl command)
+uv run python -m astra_ml.data.oww_assets --inspect
+
+# 2. pronunciation smoke test — listen to a few clips per spelling, adjust data.spellings
+uv run python -m astra_ml.data.ww_generate --smoke 4   # datasets/ww_tts/smoke/<spelling>/
+
+# 3. record real clips (needs: uv sync --group record); one session per room/noise condition,
+#    ~150+ of you across sessions plus a couple family sessions
+uv run python -m astra_ml.data.ww_record --session kitchen_quiet_0718 --n 25
+#    then freeze ~2 sessions as data.frozen_test_sessions (never trained/tuned against),
+#    list family sessions in data.family_sessions, and build the split:
+uv run python -m astra_ml.data.ww_recordings
+
+# 4. full TTS generation (30k positives + adversarials), features, training
+uv run python -m astra_ml.data.ww_generate
+uv run python -m astra_ml.training.train_ww precompute
+uv run python -m astra_ml.training.train_ww train        # tensorboard --logdir runs/ww
+
+# 5. evaluate against the gate metrics, tune trigger knobs, export
+uv run python -m astra_ml.evaluation.ww_eval --checkpoint runs/ww/best.pt
+uv run python -m astra_ml.evaluation.tune_ww --checkpoint runs/ww/best.pt
+uv run python -m astra_ml.export.export_ww --checkpoint runs/ww/best.pt   # assets/models/wakeword/
+
+# 6. regenerate the Go parity fixtures (now that ww_v1 artifacts exist)
+uv run python -m astra_ml.export.golden_ww
+```
+
 ## Setup
 
 Requires [uv](https://docs.astral.sh/uv/). Python 3.12 is pinned (ML dependency wheel compatibility).
