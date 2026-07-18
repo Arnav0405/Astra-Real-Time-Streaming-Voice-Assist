@@ -38,9 +38,7 @@ _SB_PATCH_DIR = Path(__file__).parent / "_sb_patch"
 
 def _subprocess_env() -> dict[str, str]:
     env = os.environ.copy()
-    env["PYTHONPATH"] = os.pathsep.join(
-        filter(None, [str(_SB_PATCH_DIR), env.get("PYTHONPATH")])
-    )
+    env["PYTHONPATH"] = os.pathsep.join(filter(None, [str(_SB_PATCH_DIR), env.get("PYTHONPATH")]))
     return env
 
 

@@ -41,12 +41,11 @@ else:
                 "Failed to inspect frame to check if we should ignore "
                 "importing a module lazily. This relies on a CPython "
                 "implementation detail, report an issue if you see this with "
-                "standard Python and include your version number."
+                "standard Python and include your version number.",
+                stacklevel=2,
             )
 
-        if importer_frame is not None and os.path.basename(
-            importer_frame.filename
-        ) == "inspect.py":
+        if importer_frame is not None and os.path.basename(importer_frame.filename) == "inspect.py":
             raise AttributeError()
 
         if self.lazy_module is None:
@@ -54,9 +53,7 @@ else:
                 if self.package is None:
                     self.lazy_module = importlib.import_module(self.target)
                 else:
-                    self.lazy_module = importlib.import_module(
-                        f".{self.target}", self.package
-                    )
+                    self.lazy_module = importlib.import_module(f".{self.target}", self.package)
             except Exception as e:
                 raise ImportError(f"Lazy import of {self!r} failed") from e
 

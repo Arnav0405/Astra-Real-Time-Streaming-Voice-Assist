@@ -16,6 +16,8 @@ dependencies = [
     "onnx>=1.16",
     "onnxruntime>=1.18",
     "pyyaml>=6.0",
+    "openwakeword",
+    "piper-sample-generator==3.2.0",
 ]
 
 [build-system]
@@ -29,6 +31,9 @@ packages = ["src/astra_ml"]
 dev = [
     "ruff>=0.8",
     "pytest>=8.0",
+]
+record = [
+    "sounddevice>=0.4",
 ]
 
 [tool.ruff]
@@ -51,6 +56,16 @@ testpaths = ["tests"]
 addopts = "-q"
 
 
+[tool.uv]
+# piper-sample-generator pins audiomentations==0.33.0; its librosa dep lets the
+# resolver backtrack to a 2021 numba/llvmlite pair with no py3.12 wheels (modern
+# numba caps numpy, so with a too-new numpy the resolver picks ancient numba
+# instead). Unpin audiomentations and force wheel-bearing numba; numpy settles
+# wherever numba's cap allows. psg's augmentation path is unused (astra_ml has
+# its own).
+override-dependencies = ["audiomentations>=0.36"]
+constraint-dependencies = ["numba>=0.60"]
+
 [[tool.uv.index]]
 name = "pytorch-cu130"
 url = "https://download.pytorch.org/whl/cu130"
@@ -60,3 +75,6 @@ explicit = true
 torch = [
   { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
+# PyPI openwakeword (0.6.0, 2024) depends on tflite-runtime, which has no py3.12
+# wheels; git main switched to ai-edge-litert and supports 3.12.
+openwakeword = { git = "https://github.com/dscripka/openWakeWord", rev = "368c03716d1e92591906a84949bc477f3a834455" }

@@ -67,6 +67,4 @@ def load_config(path: Path) -> Config:
     a = raw.get("augment", {})
     if "snr_db_range" in a:
         a["snr_db_range"] = tuple(a["snr_db_range"])
-    return Config(
-        data=DataConfig(**data), training=TrainingConfig(**t), augment=AugmentConfig(**a)
-    )
+    return Config(data=DataConfig(**data), training=TrainingConfig(**t), augment=AugmentConfig(**a))

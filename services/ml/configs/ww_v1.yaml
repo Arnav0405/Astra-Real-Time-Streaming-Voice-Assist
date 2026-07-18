@@ -1,0 +1,54 @@
+data:
+  frontends_dir: datasets/oww_frontends
+  voices_dir: datasets/piper_voices
+  voices: [en_US-libritts_r-medium]
+  tts_out: datasets/ww_tts
+  spellings: [astraa, astra, astrah]
+  n_positives: 30000
+  n_positives_val: 2000
+  adversarial_phrases:
+    [astro, extra, astronaut, master, ad astra, a strong, nasa, castra, australia, asthma]
+  n_adversarial_per_phrase: 800
+  acav_features: datasets/oww_negatives/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
+  acav_subsample: 2000000
+  negative_audio_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
+  recordings_root: datasets/ww_recordings
+  frozen_test_sessions: []   # filled once recordings exist; never trained on
+  family_sessions: []        # eval-only
+
+augment:
+  rir_dir: datasets/source/RIRS_NOISES
+  rir_prob: 0.5
+  noise_prob: 0.6
+  snr_db_range: [3.0, 25.0]
+  noise_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
+  user_pitch_semitones: [-2.0, 2.0]
+  user_speed_range: [0.9, 1.1]
+  augment_rounds_user: 20
+
+training:
+  batch_size: 1024
+  steps: 20000
+  lr: 1.0e-3
+  layer_size: 128
+  max_negative_weight: 1500
+  val_every: 500
+  seed: 1234
+  features_cache: datasets/ww_features
+  runs_dir: runs/ww
+
+postproc:
+  threshold: 0.5
+  patience_frames: 2
+  refractory_seconds: 2.0
+
+gating:
+  preroll_frames: 50
+  partial_chunk: drop
+
+eval:
+  fa_audio_dirs: [datasets/chime_prepared/backgrounds, datasets/ESC-50-master/audio]
+  recall_floor_quiet: 0.95
+  recall_floor_noisy: 0.80
+  max_fa_per_hour: 0.5
+  max_latency_ms: 500
