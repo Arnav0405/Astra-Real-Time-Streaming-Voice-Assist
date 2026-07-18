@@ -1,0 +1,136 @@
+"""Dataset-free tests for wake-word eval metrics and tuning."""
+
+import json
+
+import numpy as np
+import torch
+from test_ww_frontend import fake_embed, fake_melspec
+
+from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
+from astra_ml.evaluation.tune_ww import pick_best, update_sidecar
+from astra_ml.evaluation.ww_eval import (
+    fa_per_hour,
+    recall_and_latency,
+    stream_scores,
+    trigger_frames,
+)
+from astra_ml.postproc_ww import WwPostprocConfig
+
+PP = WwPostprocConfig(threshold=0.5, patience_frames=2, refractory_frames=100)
+
+
+class ConstantHead(torch.nn.Module):
+    def __init__(self, value: float):
+        super().__init__()
+        self.value = value
+
+    def forward(self, feats):
+        return torch.full((feats.shape[0],), self.value)
+
+
+def test_stream_scores_cadence():
+    fe = WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND)
+    audio = np.zeros(1280 * 10 + 700, dtype=np.float32)  # partial tail chunk dropped
+    scores = stream_scores(fe, ConstantHead(0.7), audio)
+    assert scores.shape == (10,)
+    assert np.allclose(scores, 0.7)
+
+
+def test_trigger_frames_uses_transport_frame_indices():
+    scores = np.array([0.9, 0.9, 0.1], dtype=np.float32)
+    assert trigger_frames(scores, PP) == [7]  # second chunk ends at frame 7
+
+
+def test_recall_and_latency():
+    hit = np.array([0.1, 0.9, 0.9, 0.1], dtype=np.float32)  # trigger at frame 11
+    miss = np.zeros(4, dtype=np.float32)
+    recall, latencies = recall_and_latency([hit, miss], [5, 5], PP)
+    assert recall == 0.5
+    assert latencies == [(11 - 5) * 20.0]
+
+
+def test_latency_clamped_at_zero():
+    hit = np.array([0.9, 0.9], dtype=np.float32)
+    _, latencies = recall_and_latency([hit], [50], PP)
+    assert latencies == [0.0]
+
+
+def test_fa_per_hour():
+    # one trigger in one 80 ms chunk-hour: 45000 chunks/hour
+    scores = np.zeros(45000, dtype=np.float32)
+    scores[100:102] = 0.9
+    assert fa_per_hour([scores], PP) == 1.0
+
+
+def test_pick_best_respects_floors_and_prefers_low_fa():
+    results = [
+        {
+            "threshold": 0.3,
+            "patience_frames": 1,
+            "recall_quiet": 1.0,
+            "recall_noisy": 0.9,
+            "fa_per_hour": 5.0,
+            "latency_ms_median": 80.0,
+        },
+        {
+            "threshold": 0.6,
+            "patience_frames": 2,
+            "recall_quiet": 0.96,
+            "recall_noisy": 0.85,
+            "fa_per_hour": 0.2,
+            "latency_ms_median": 160.0,
+        },
+        {
+            "threshold": 0.9,
+            "patience_frames": 3,
+            "recall_quiet": 0.5,
+            "recall_noisy": 0.4,
+            "fa_per_hour": 0.0,
+            "latency_ms_median": 240.0,
+        },
+    ]
+    best = pick_best(results, floor_quiet=0.95, floor_noisy=0.80)
+    assert best["threshold"] == 0.6
+
+
+def test_pick_best_falls_back_to_max_recall():
+    results = [
+        {
+            "threshold": 0.6,
+            "patience_frames": 1,
+            "recall_quiet": 0.7,
+            "recall_noisy": 0.6,
+            "fa_per_hour": 0.1,
+            "latency_ms_median": 100.0,
+        },
+        {
+            "threshold": 0.3,
+            "patience_frames": 1,
+            "recall_quiet": 0.9,
+            "recall_noisy": 0.8,
+            "fa_per_hour": 2.0,
+            "latency_ms_median": 90.0,
+        },
+    ]
+    best = pick_best(results, floor_quiet=0.95, floor_noisy=0.80)
+    assert best["threshold"] == 0.3
+
+
+def test_update_sidecar_touches_only_trigger_knobs(tmp_path):
+    sidecar = tmp_path / "ww_v1.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "sample_rate": 16000,
+                "recommended_threshold": 0.5,
+                "postproc": {"patience_frames": 1, "refractory_frames": 100},
+                "gating": {"preroll_frames": 50},
+            }
+        )
+    )
+    update_sidecar(sidecar, {"threshold": 0.65, "patience_frames": 2})
+    got = json.loads(sidecar.read_text())
+    assert got["recommended_threshold"] == 0.65
+    assert got["postproc"]["patience_frames"] == 2
+    assert got["postproc"]["refractory_frames"] == 100
+    assert got["gating"] == {"preroll_frames": 50}
