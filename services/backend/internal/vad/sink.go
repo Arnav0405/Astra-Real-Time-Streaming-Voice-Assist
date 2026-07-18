@@ -58,32 +58,30 @@ func (s *Sink) Run(frames <-chan server.Frame) {
 		}
 		return
 	}
-	defer inf.Close()
+	det := &Detector{step: inf, pp: s.pp}
+	defer det.Close()
 
 	failures := 0
 	for f := range frames {
 		if s.err != nil {
 			continue // fatal already signaled; just drain
 		}
-		prob, err := inf.Step(f.PCM)
+		e, ok, err := det.Push(f.PCM)
 		if err != nil {
 			log.Printf("stream %s: frame %d: %v (skipped)", s.streamID, f.Seq, err)
 			failures++
 			if failures >= maxConsecutiveFailures {
 				s.fail(fmt.Errorf("vad inference failed %d frames in a row: %w", failures, err))
 			}
-			// ponytail: skipped frame still advances the clock so event
-			// indices stay aligned with audio time; run counters keep going.
-			s.pp.frame++
 			continue
 		}
 		failures = 0
-		if e, ok := s.pp.push(prob); ok {
+		if ok {
 			s.onEvent(e)
 		}
 	}
 	if s.err == nil {
-		for _, e := range s.pp.finish() {
+		for _, e := range det.Finish() {
 			s.onEvent(e)
 		}
 	}
