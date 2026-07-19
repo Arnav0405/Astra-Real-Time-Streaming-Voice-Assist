@@ -36,6 +36,7 @@ from astra_ml.training.ww_config import WwConfig, load_ww_config
 INT16_SCALE = 32767.0  # frontend consumes int16-range floats
 JITTER_OFFSETS = (0, 800, 1600)  # word end at window end, -50 ms, -100 ms
 ACAV_VAL_ROWS = 100_000
+VAL_TARGET_FPR = 1e-3  # tune knob: operating point checkpoints are selected at
 LOCAL_NEG_HOP_S = 1.0
 
 
@@ -151,7 +152,11 @@ class FeaturePools:
         cache = cfg.training.features_cache
         self.rng = np.random.default_rng(seed)
         self.pos = np.load(cache / "positives.npy")
-        self.adv = np.load(cache / "negatives_adv.npy")
+        adv = np.load(cache / "negatives_adv.npy")
+        # ponytail: random split, not phrase-contiguous — every phrase must stay in train
+        perm = self.rng.permutation(len(adv))
+        n_adv_val = len(adv) // 10
+        self.adv, self.adv_val = adv[perm[n_adv_val:]], adv[perm[:n_adv_val]]
         self.local = np.load(cache / "negatives_local.npy")
         if cfg.data.acav_features.exists():
             acav = np.load(cfg.data.acav_features, mmap_mode="r")
@@ -204,7 +209,11 @@ def train(cfg: WwConfig) -> Path:
 
     pools = FeaturePools(cfg, t.seed)
     val_pos = torch.from_numpy(np.load(t.features_cache / "positives_val.npy").astype(np.float32))
-    val_neg = torch.from_numpy(np.asarray(pools.acav_val[:20_000]).astype(np.float32))
+    # hard negatives (held-out adversarial phrases) alongside easy ACAV — ACAV alone scores 0 FP
+    # from step 0 and carries no signal for checkpoint selection.
+    val_neg = torch.from_numpy(
+        np.concatenate([np.asarray(pools.acav_val[:20_000]), pools.adv_val]).astype(np.float32)
+    )
 
     model = WwHead(t.layer_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=t.lr)
@@ -224,23 +233,37 @@ def train(cfg: WwConfig) -> Path:
         weights = torch.where(
             labels > 0.5, torch.ones_like(labels), torch.full_like(labels, neg_weight)
         )
-        loss = (criterion(model.logits(feats), labels) * weights).mean()
+        raw = criterion(model.logits(feats), labels)
+        loss = (raw * weights).mean()
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         scheduler.step()
         writer.add_scalar("loss/train", loss.item(), step)
+        # unweighted BCE is the only loss comparable across steps: loss/train is multiplied by a
+        # negative weight that ramps 1 -> max_negative_weight, so it rises even as the model improves.
+        writer.add_scalar("loss/train_unweighted", raw.mean().item(), step)
 
         if step % t.val_every == 0 or step == t.steps:
             model.eval()
-            recall = (_predict(model, val_pos, device) >= 0.5).float().mean().item()
-            fp = 0.0
-            if len(val_neg):
-                fp = (_predict(model, val_neg, device) >= 0.5).float().mean().item()
-            score = recall - fp
+            pos_scores = _predict(model, val_pos, device)
+            neg_scores = _predict(model, val_neg, device)
+            recall = (pos_scores >= 0.5).float().mean().item()
+            fp = (neg_scores >= 0.5).float().mean().item() if len(neg_scores) else 0.0
+            # Select on recall at a fixed low FP rate, not at a fixed 0.5 threshold: the negative
+            # weight ramp shifts the score distribution every step, so 0.5 is a moving target.
+            if len(neg_scores):
+                thresh = torch.quantile(neg_scores, 1.0 - VAL_TARGET_FPR).item()
+                score = (pos_scores > thresh).float().mean().item()
+            else:
+                score = recall
             writer.add_scalar("val/recall", recall, step)
             writer.add_scalar("val/fp_rate", fp, step)
-            print(f"step {step}: loss {loss.item():.4f} recall {recall:.3f} fp {fp:.5f}")
+            writer.add_scalar("val/recall_at_target_fpr", score, step)
+            print(
+                f"step {step}: loss {loss.item():.4f} recall {recall:.3f} "
+                f"fp {fp:.5f} recall@fpr {score:.3f}"
+            )
             if score > best_score:
                 best_score = score
                 torch.save(
