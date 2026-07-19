@@ -40,6 +40,26 @@ FRAMES_PER_CHUNK = 4  # 20 ms transport frames per score step
 LEAD_IN_S = 1.0
 TAIL_S = 0.5
 NOISY_SNR_DB = 5.0
+LEAD_IN_FRAMES = int(LEAD_IN_S * SR) // 320
+SPEECH_REL_THRESH = 0.05  # tune knob: fraction of clip peak counted as speech
+
+
+def speech_end_sample(clip: np.ndarray, rel_thresh: float = SPEECH_REL_THRESH) -> int:
+    """Sample index just past the last speech energy in a clip.
+
+    Recordings are fixed-length capture buffers (3 s) with up to ~2 s of trailing
+    silence, so len(clip) is the end of the *buffer*, not of the wake word. Using
+    the buffer end makes every latency negative and the max(0, ...) clamp reports
+    a median of 0 ms regardless of how the model actually behaves.
+    """
+    # ponytail: relative-energy gate, not the trained VAD — these are close-mic
+    # prompted captures. Switch to vad_v1.onnx if room tone ever floats the floor.
+    env = np.abs(clip)
+    peak = float(env.max()) if len(env) else 0.0
+    if peak == 0.0:
+        return len(clip)
+    above = np.nonzero(env > rel_thresh * peak)[0]
+    return int(above[-1]) + 1 if len(above) else len(clip)
 
 
 def stream_scores(frontend: WwFrontend, head, audio: np.ndarray) -> np.ndarray:
@@ -77,16 +97,24 @@ def recall_and_latency(
     score_streams: list[np.ndarray],
     word_end_frames: list[int],
     pp_cfg: WwPostprocConfig,
-) -> tuple[float, list[float]]:
-    """Fraction of streams with a trigger + latency (ms after word end) per hit."""
-    hits, latencies = 0, []
+    min_frame: int = 0,
+) -> tuple[float, list[float], int]:
+    """Fraction of streams with a trigger + latency (ms after word end) per hit.
+
+    Triggers before `min_frame` land in the prepended lead-in silence, where there
+    is nothing to detect. They are false accepts, not hits: counting them inflates
+    recall toward 1.0 for a model that simply fires constantly.
+    """
+    hits, latencies, silence_fa = 0, [], 0
     for scores, end_frame in zip(score_streams, word_end_frames, strict=True):
         triggers = trigger_frames(scores, pp_cfg)
+        silence_fa += sum(1 for t in triggers if t < min_frame)
+        triggers = [t for t in triggers if t >= min_frame]
         if triggers:
             hits += 1
             latencies.append(max(0.0, (triggers[0] - end_frame) * 20.0))
     recall = hits / len(score_streams) if score_streams else 0.0
-    return recall, latencies
+    return recall, latencies, silence_fa
 
 
 def fa_per_hour(score_streams: list[np.ndarray], pp_cfg: WwPostprocConfig) -> float:
@@ -124,12 +152,13 @@ def collect_streams(cfg: WwConfig, frontend: WwFrontend, head) -> dict:
     def category(name: str, raw_clips: list[np.ndarray], noisy: bool) -> None:
         cat_streams, ends = [], []
         for clip in raw_clips:
+            # measure the word end on the clean clip: added noise raises the floor
+            end_sample = int(LEAD_IN_S * SR) + speech_end_sample(clip)
             if noisy:
                 noise = rng.normal(0, 0.05, len(clip)).astype(np.float32)
                 clip = add_noise(clip, noise, NOISY_SNR_DB)
             audio = clip_stream(clip)
             cat_streams.append(stream_scores(frontend, head, audio))
-            end_sample = int(LEAD_IN_S * SR) + len(clip)
             ends.append(end_sample // 320)  # 20 ms frame index of word end
         streams[name] = cat_streams
         word_end[name] = ends
@@ -148,14 +177,19 @@ def collect_streams(cfg: WwConfig, frontend: WwFrontend, head) -> dict:
 def build_report(collected: dict, pp_cfg: WwPostprocConfig, cfg: WwConfig) -> dict:
     report: dict = {"postproc": pp_cfg.__dict__}
     latencies: list[float] = []
+    silence_fa = 0
     for name, cat_streams in collected["recall"].items():
         if not cat_streams:
             report[f"recall_{name}"] = None
             continue
-        recall, lat = recall_and_latency(cat_streams, collected["word_end"][name], pp_cfg)
+        recall, lat, fa = recall_and_latency(
+            cat_streams, collected["word_end"][name], pp_cfg, min_frame=LEAD_IN_FRAMES
+        )
         report[f"recall_{name}"] = recall
+        silence_fa += fa
         if name in ("quiet", "noisy"):
             latencies += lat
+    report["lead_in_false_accepts"] = silence_fa
     report["fa_per_hour"] = fa_per_hour(collected["fa"], pp_cfg)
     report["fa_hours"] = sum(len(s) * CHUNK for s in collected["fa"]) / SR / 3600
     report["latency_ms_median"] = float(np.median(latencies)) if latencies else None

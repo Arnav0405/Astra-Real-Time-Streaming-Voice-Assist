@@ -11,6 +11,7 @@ from astra_ml.evaluation.tune_ww import pick_best, update_sidecar
 from astra_ml.evaluation.ww_eval import (
     fa_per_hour,
     recall_and_latency,
+    speech_end_sample,
     stream_scores,
     trigger_frames,
 )
@@ -44,15 +45,36 @@ def test_trigger_frames_uses_transport_frame_indices():
 def test_recall_and_latency():
     hit = np.array([0.1, 0.9, 0.9, 0.1], dtype=np.float32)  # trigger at frame 11
     miss = np.zeros(4, dtype=np.float32)
-    recall, latencies = recall_and_latency([hit, miss], [5, 5], PP)
+    recall, latencies, silence_fa = recall_and_latency([hit, miss], [5, 5], PP)
     assert recall == 0.5
     assert latencies == [(11 - 5) * 20.0]
+    assert silence_fa == 0
 
 
 def test_latency_clamped_at_zero():
     hit = np.array([0.9, 0.9], dtype=np.float32)
-    _, latencies = recall_and_latency([hit], [50], PP)
+    _, latencies, _ = recall_and_latency([hit], [50], PP)
     assert latencies == [0.0]
+
+
+def test_lead_in_trigger_is_a_false_accept_not_a_hit():
+    # fires at frame 7, inside the lead-in silence: nothing to detect there
+    early = np.array([0.9, 0.9, 0.1, 0.1], dtype=np.float32)
+    recall, latencies, silence_fa = recall_and_latency([early], [20], PP, min_frame=10)
+    assert recall == 0.0
+    assert latencies == []
+    assert silence_fa == 1
+
+
+def test_speech_end_ignores_trailing_silence():
+    # a 3 s capture buffer holding a 0.5 s word: word end is 0.5 s, not 3 s
+    clip = np.zeros(3 * 16000, dtype=np.float32)
+    clip[: 16000 // 2] = 0.8
+    assert speech_end_sample(clip) == 16000 // 2
+
+
+def test_speech_end_of_pure_silence_falls_back_to_clip_length():
+    assert speech_end_sample(np.zeros(1000, dtype=np.float32)) == 1000
 
 
 def test_fa_per_hour():

@@ -21,6 +21,7 @@ from astra_ml.evaluation.ww_eval import (
     SR,
     collect_streams,
     fa_per_hour,
+    LEAD_IN_FRAMES,
     recall_and_latency,
 )
 from astra_ml.postproc_ww import WwPostprocConfig
@@ -39,11 +40,17 @@ def score_grid(collected: dict, refractory_frames: int) -> list[dict]:
     for threshold in THRESHOLDS:
         for patience in PATIENCES:
             pp_cfg = WwPostprocConfig(threshold, patience, refractory_frames)
-            recall_q, lat_q = recall_and_latency(
-                collected["recall"]["quiet"], collected["word_end"]["quiet"], pp_cfg
+            recall_q, lat_q, _ = recall_and_latency(
+                collected["recall"]["quiet"],
+                collected["word_end"]["quiet"],
+                pp_cfg,
+                min_frame=LEAD_IN_FRAMES,
             )
-            recall_n, lat_n = recall_and_latency(
-                collected["recall"]["noisy"], collected["word_end"]["noisy"], pp_cfg
+            recall_n, lat_n, _ = recall_and_latency(
+                collected["recall"]["noisy"],
+                collected["word_end"]["noisy"],
+                pp_cfg,
+                min_frame=LEAD_IN_FRAMES,
             )
             latencies = lat_q + lat_n
             results.append(
