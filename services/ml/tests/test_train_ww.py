@@ -86,20 +86,24 @@ def test_precompute_shapes(ww_cfg):
     cache = precompute(ww_cfg, frontend=fe)
 
     pos = np.load(cache / "positives.npy")
-    # 2 TTS train clips * 3 jitters + 1 user clip * 2 augment rounds * 3 jitters
-    assert pos.shape == (12, HEAD_FRAMES, EMB_DIM)
+    # 2 TTS train clips * 3 jitters; user clips are cached separately
+    assert pos.shape == (6, HEAD_FRAMES, EMB_DIM)
     assert pos.dtype == np.float16
+    # 1 user clip * 2 augment rounds * 3 jitters
+    assert np.load(cache / "positives_user.npy").shape == (6, HEAD_FRAMES, EMB_DIM)
     assert np.load(cache / "positives_val.npy").shape == (3, HEAD_FRAMES, EMB_DIM)
     assert np.load(cache / "negatives_adv.npy").shape == (6, HEAD_FRAMES, EMB_DIM)
     assert np.load(cache / "negatives_local.npy").shape == (0, HEAD_FRAMES, EMB_DIM)
 
 
-def _write_feature_cache(cfg, n_pos=8, n_val=4, n_adv=8):
+def _write_feature_cache(cfg, n_pos=8, n_val=4, n_adv=8, n_user=8):
     cache = cfg.training.features_cache
     cache.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
     shape = (HEAD_FRAMES, EMB_DIM)
     np.save(cache / "positives.npy", rng.normal(1, 0.1, (n_pos, *shape)).astype(np.float16))
+    # marked at 5.0 so a batch can be traced back to which positive pool it came from
+    np.save(cache / "positives_user.npy", np.full((n_user, *shape), 5.0, dtype=np.float16))
     np.save(cache / "positives_val.npy", rng.normal(1, 0.1, (n_val, *shape)).astype(np.float16))
     np.save(cache / "negatives_adv.npy", rng.normal(0, 0.1, (n_adv, *shape)).astype(np.float16))
     np.save(cache / "negatives_local.npy", np.zeros((0, *shape), dtype=np.float16))
@@ -112,6 +116,27 @@ def test_feature_pools_batch_composition(ww_cfg):
     assert feats.shape[1:] == (HEAD_FRAMES, EMB_DIM)
     assert labels[: 8 // 4].sum() == 2  # first quarter positive
     assert labels[8 // 4 :].sum() == 0
+
+
+def test_user_positive_frac_controls_the_mix(ww_cfg):
+    _write_feature_cache(ww_cfg)
+    ww_cfg.training.user_positive_frac = 0.5
+    pools = FeaturePools(ww_cfg, seed=0)
+    feats, labels = pools.batch(400)
+    pos = feats[labels > 0.5]
+    from_user = (pos.reshape(len(pos), -1)[:, 0] == 5.0).sum().item()
+    assert len(pos) == 100  # a quarter of the batch, as before
+    assert from_user == 50  # half of those drawn from real recordings, not TTS
+
+
+def test_user_positive_frac_zero_falls_back_to_tts_only(ww_cfg):
+    _write_feature_cache(ww_cfg, n_user=0)
+    ww_cfg.training.user_positive_frac = 0.5
+    pools = FeaturePools(ww_cfg, seed=0)  # empty user pool must not starve the batch
+    feats, labels = pools.batch(400)
+    pos = feats[labels > 0.5]
+    assert len(pos) == 100
+    assert (pos.reshape(len(pos), -1)[:, 0] == 5.0).sum().item() == 0
 
 
 def test_train_writes_loadable_checkpoint(ww_cfg, capsys):

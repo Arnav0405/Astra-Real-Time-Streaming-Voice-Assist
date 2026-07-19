@@ -7,7 +7,7 @@ import torch
 from test_ww_frontend import fake_embed, fake_melspec
 
 from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
-from astra_ml.evaluation.tune_ww import pick_best, update_sidecar
+from astra_ml.evaluation.tune_ww import pick_best, score_grid, update_sidecar
 from astra_ml.evaluation.ww_eval import (
     fa_per_hour,
     recall_and_latency,
@@ -82,6 +82,36 @@ def test_fa_per_hour():
     scores = np.zeros(45000, dtype=np.float32)
     scores[100:102] = 0.9
     assert fa_per_hour([scores], PP) == 1.0
+
+
+def _collected(score: float, n_cat: int = 2):
+    """Streams that stay silent through the lead-in, then hold `score`."""
+    stream = np.array([0.0] * 15 + [score] * 15, dtype=np.float32)
+    cats = ["quiet", "noisy", "test", "family"]
+    return {
+        "recall": {c: [stream.copy() for _ in range(n_cat)] for c in cats},
+        "word_end": {c: [60] * n_cat for c in cats},
+        "fa": [],
+    }
+
+
+def test_score_grid_reports_family_recall_across_thresholds():
+    # 0.6-scoring clips: detected below that threshold, missed above it. A recall_family
+    # that collapses across the grid is a threshold problem, not a generalization one.
+    grid = score_grid(_collected(0.6), refractory_frames=100)
+    assert all("recall_family" in r for r in grid)
+    low = [r for r in grid if r["threshold"] == 0.5 and r["patience_frames"] == 2][0]
+    high = [r for r in grid if r["threshold"] == 0.9 and r["patience_frames"] == 2][0]
+    assert low["recall_family"] == 1.0
+    assert high["recall_family"] == 0.0
+
+
+def test_score_grid_family_is_reported_not_tuned_against():
+    # family recall must not steer pick_best — it is an eval_only diagnostic
+    grid = score_grid(_collected(0.6), refractory_frames=100)
+    for r in grid:
+        r["recall_family"] = 0.0  # tank it; selection must be unchanged
+    assert pick_best(grid, floor_quiet=0.95, floor_noisy=0.80)["recall_quiet"] == 1.0
 
 
 def test_pick_best_respects_floors_and_prefers_low_fa():

@@ -36,6 +36,7 @@ training:
   seed: 1234
   features_cache: datasets/ww_features
   runs_dir: runs/ww
+  user_positive_frac: 0.5  # was effectively 0.048 when TTS and user shared one pool
 
 postproc:
   threshold: 0.5

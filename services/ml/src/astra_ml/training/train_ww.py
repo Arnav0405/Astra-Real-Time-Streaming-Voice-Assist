@@ -36,8 +36,12 @@ from astra_ml.training.ww_config import WwConfig, load_ww_config
 INT16_SCALE = 32767.0  # frontend consumes int16-range floats
 JITTER_OFFSETS = (0, 800, 1600)  # word end at window end, -50 ms, -100 ms
 ACAV_VAL_ROWS = 100_000
-VAL_TARGET_FPR = 1e-3  # tune knob: operating point checkpoints are selected at
-LOCAL_NEG_HOP_S = 1.0
+SCORE_STEPS_PER_HOUR = 16000 * 3600 / 1280  # 45k 80 ms chunks; must match ww_eval cadence
+# ww_eval scores every 1280 samples (80 ms). Sampling local negatives at 1.0 s left the model
+# blind to 12 of every 13 alignments it is graded on: 4 windows per 5 s clip at train time vs 38
+# at eval. ponytail: 160 ms, not the full 80 ms, to keep the pool ~4x smaller; drop to 1280 if
+# false accepts still cluster at odd offsets.
+LOCAL_NEG_HOP_S = 0.16
 
 
 def pick_device() -> torch.device:
@@ -123,16 +127,25 @@ def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
         return out
 
     positives = tts_feats(groups["train"], augment=True)
+    # kept in its own array, not concatenated into positives: merging them makes the TTS:user
+    # ratio a property of the cache (20:1 here) instead of something training can control.
+    user_positives = []
     for path in _read_recordings(cfg):
         clip = load_mono(path)
         for _ in range(cfg.augment.augment_rounds_user):
             variant = augment_user_clip(clip, rng, cfg.augment, noise_paths, rir_paths)
-            positives.append(clip_features(frontend, variant))
+            user_positives.append(clip_features(frontend, variant))
 
     cache = cfg.training.features_cache
     cache.mkdir(parents=True, exist_ok=True)
+    empty = np.zeros(
+        (0, frontend.cfg.head_frames, frontend.cfg.emb_dim), dtype=np.float16
+    )
     arrays = {
         "positives": np.concatenate(positives).astype(np.float16),
+        "positives_user": (
+            np.concatenate(user_positives).astype(np.float16) if user_positives else empty
+        ),
         "positives_val": np.concatenate(tts_feats(groups["val"], augment=False)).astype(np.float16),
         "negatives_adv": np.concatenate(tts_feats(groups["adversarial"], augment=True)).astype(
             np.float16
@@ -152,6 +165,11 @@ class FeaturePools:
         cache = cfg.training.features_cache
         self.rng = np.random.default_rng(seed)
         self.pos = np.load(cache / "positives.npy")
+        user_path = cache / "positives_user.npy"
+        self.user = np.load(user_path) if user_path.exists() else self.pos[:0]
+        self.user_frac = cfg.training.user_positive_frac if len(self.user) else 0.0
+        if not len(self.user):
+            print("warning: no user positives — training on TTS voices alone")
         adv = np.load(cache / "negatives_adv.npy")
         # ponytail: random split, not phrase-contiguous — every phrase must stay in train
         perm = self.rng.permutation(len(adv))
@@ -177,12 +195,15 @@ class FeaturePools:
     def batch(self, batch_size: int) -> tuple[torch.Tensor, torch.Tensor]:
         n_pos = batch_size // 4
         n_neg = batch_size - n_pos
+        n_user = int(n_pos * self.user_frac)
+        n_tts = n_pos - n_user
         n_adv = n_neg // 4
         n_local = min(len(self.local), n_neg // 4)
         n_acav = n_neg - n_adv - n_local
         feats = np.concatenate(
             [
-                self._draw(self.pos, n_pos),
+                self._draw(self.pos, n_tts),
+                self._draw(self.user, n_user),
                 self._draw(self.adv, n_adv),
                 self._draw(self.local, n_local),
                 self._draw(self.acav, n_acav),
@@ -210,10 +231,16 @@ def train(cfg: WwConfig) -> Path:
     pools = FeaturePools(cfg, t.seed)
     val_pos = torch.from_numpy(np.load(t.features_cache / "positives_val.npy").astype(np.float32))
     # hard negatives (held-out adversarial phrases) alongside easy ACAV — ACAV alone scores 0 FP
-    # from step 0 and carries no signal for checkpoint selection.
+    # from step 0 and carries no signal for checkpoint selection. Use the full ACAV val tail:
+    # resolving the FP rate the gate demands (~1e-5) needs every negative we can afford.
     val_neg = torch.from_numpy(
-        np.concatenate([np.asarray(pools.acav_val[:20_000]), pools.adv_val]).astype(np.float32)
+        np.concatenate([np.asarray(pools.acav_val), pools.adv_val]).astype(np.float32)
     )
+    # Select at the operating point the product gate actually demands, not a round number.
+    # eval.max_fa_per_hour=0.5 over 45k score steps/hour => ~1.1e-5 per-window FP. A val FP rate
+    # of 4e-4 "looks like zero" and is 36x too high; only FA/hour makes that legible.
+    target_fpr = cfg.eval.max_fa_per_hour / SCORE_STEPS_PER_HOUR
+    print(f"target fpr {target_fpr:.2e} ({cfg.eval.max_fa_per_hour} fa/hr), val_neg {len(val_neg)}")
 
     model = WwHead(t.layer_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=t.lr)
@@ -253,16 +280,18 @@ def train(cfg: WwConfig) -> Path:
             # Select on recall at a fixed low FP rate, not at a fixed 0.5 threshold: the negative
             # weight ramp shifts the score distribution every step, so 0.5 is a moving target.
             if len(neg_scores):
-                thresh = torch.quantile(neg_scores, 1.0 - VAL_TARGET_FPR).item()
+                thresh = torch.quantile(neg_scores, 1.0 - target_fpr).item()
                 score = (pos_scores > thresh).float().mean().item()
             else:
                 score = recall
             writer.add_scalar("val/recall", recall, step)
             writer.add_scalar("val/fp_rate", fp, step)
             writer.add_scalar("val/recall_at_target_fpr", score, step)
+            # the only val number directly comparable to the eval.max_fa_per_hour gate
+            writer.add_scalar("val/est_fa_per_hour", fp * SCORE_STEPS_PER_HOUR, step)
             print(
                 f"step {step}: loss {loss.item():.4f} recall {recall:.3f} "
-                f"fp {fp:.5f} recall@fpr {score:.3f}"
+                f"fp {fp:.5f} (~{fp * SCORE_STEPS_PER_HOUR:.1f} fa/hr) recall@fpr {score:.3f}"
             )
             if score > best_score:
                 best_score = score

@@ -51,6 +51,10 @@ class WwTrainingConfig:
     seed: int
     features_cache: Path
     runs_dir: Path
+    # Fraction of each batch's positives drawn from real user recordings rather than TTS.
+    # Decoupled from augment_rounds_user on purpose: the mix is a training knob, and tying it
+    # to how many augmented copies sit on disk means re-running precompute to change it.
+    user_positive_frac: float = 0.5
 
 
 @dataclass
