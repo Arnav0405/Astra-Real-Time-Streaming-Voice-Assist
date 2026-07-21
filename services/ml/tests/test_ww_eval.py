@@ -186,3 +186,19 @@ def test_update_sidecar_touches_only_trigger_knobs(tmp_path):
     assert got["postproc"]["patience_frames"] == 2
     assert got["postproc"]["refractory_frames"] == 100
     assert got["gating"] == {"preroll_frames": 50}
+
+
+def test_acav_est_fa_per_hour(ww_cfg):
+    import pytest
+
+    from astra_ml.evaluation.ww_eval import acav_est_fa_per_hour
+    from astra_ml.models.ww import EMB_DIM, HEAD_FRAMES
+    from astra_ml.training.train_ww import SCORE_STEPS_PER_HOUR
+
+    # no ACAV file downloaded yet -> reported as None, never a crash
+    assert acav_est_fa_per_hour(ww_cfg, ConstantHead(0.9), 0.5) is None
+
+    np.save(ww_cfg.data.acav_features, np.zeros((20, HEAD_FRAMES, EMB_DIM), dtype=np.float16))
+    always = acav_est_fa_per_hour(ww_cfg, ConstantHead(0.9), 0.5)
+    assert always == pytest.approx(SCORE_STEPS_PER_HOUR)  # every window fires
+    assert acav_est_fa_per_hour(ww_cfg, ConstantHead(0.1), 0.5) == 0.0

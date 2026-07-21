@@ -23,6 +23,35 @@ def scan_wavs(dirs: list[Path]) -> list[Path]:
     return sorted(p for d in dirs for p in Path(d).rglob("*.wav"))
 
 
+N_FOLDS = 5
+
+
+def wav_fold(path: Path, index: int) -> int:
+    """Fold 1..N_FOLDS for a negative-audio clip.
+
+    ESC-50 encodes its official fold as the filename's leading digit
+    ("4-100032-A-0.wav" -> 4), verified against meta/esc50.csv for all 2000
+    clips. Corpora without folds fall back to position in the sorted scan,
+    which is stable as long as files are not added mid-corpus.
+    """
+    lead = path.stem.split("-")[0]
+    return int(lead) if lead.isdigit() else index % N_FOLDS + 1
+
+
+def scan_wavs_in_folds(dirs: list[Path], folds: list[int]) -> list[Path]:
+    """scan_wavs restricted to `folds`. Empty `folds` means no filtering.
+
+    Training negatives and eval false-accept audio draw from the same corpora,
+    so without disjoint folds the FA rate is measured on audio the model
+    trained on and reads better than it is.
+    """
+    wavs = scan_wavs(dirs)
+    if not folds:
+        return wavs
+    keep = set(folds)
+    return [w for i, w in enumerate(wavs) if wav_fold(w, i) in keep]
+
+
 def load_mono(path: Path) -> np.ndarray:
     audio, sr = sf.read(path, dtype="float32", always_2d=True)
     audio = audio[:, 0]

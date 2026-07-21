@@ -23,6 +23,10 @@ class WwDataConfig:
     recordings_root: Path
     frozen_test_sessions: list[str] = field(default_factory=list)
     family_sessions: list[str] = field(default_factory=list)
+    # Disjoint folds over negative_audio_dirs. Training and eval read the same corpora,
+    # so overlapping folds mean FA is measured on trained-on audio. Empty = no split.
+    negative_folds: list[int] = field(default_factory=list)
+    negative_val_folds: list[int] = field(default_factory=list)
 
     def voice_paths(self) -> list[Path]:
         return [self.voices_dir / f"{name}.onnx" for name in self.voices]
@@ -77,6 +81,7 @@ class WwEvalConfig:
     recall_floor_noisy: float
     max_fa_per_hour: float
     max_latency_ms: float
+    fa_folds: list[int] = field(default_factory=list)  # must be disjoint from data.negative_folds
 
 
 @dataclass
@@ -117,9 +122,26 @@ def _convert(section: dict) -> dict:
     return out
 
 
+def _check_folds_disjoint(data: WwDataConfig, eval_cfg: WwEvalConfig) -> None:
+    """A fold in two roles silently restores the leak the split exists to remove."""
+    named = {
+        "negative_folds": set(data.negative_folds),
+        "negative_val_folds": set(data.negative_val_folds),
+        "fa_folds": set(eval_cfg.fa_folds),
+    }
+    for a, b in (
+        ("negative_folds", "negative_val_folds"),
+        ("negative_folds", "fa_folds"),
+        ("negative_val_folds", "fa_folds"),
+    ):
+        overlap = named[a] & named[b]
+        if overlap:
+            raise ValueError(f"{a} and {b} share fold(s) {sorted(overlap)}; they must be disjoint")
+
+
 def load_ww_config(path: Path) -> WwConfig:
     raw = yaml.safe_load(Path(path).read_text())
-    return WwConfig(
+    cfg = WwConfig(
         data=WwDataConfig(**_convert(raw["data"])),
         augment=WwAugmentConfig(**_convert(raw["augment"])),
         training=WwTrainingConfig(**_convert(raw["training"])),
@@ -127,3 +149,5 @@ def load_ww_config(path: Path) -> WwConfig:
         gating=WwGatingConfig(**raw["gating"]),
         eval=WwEvalConfig(**_convert(raw["eval"])),
     )
+    _check_folds_disjoint(cfg.data, cfg.eval)
+    return cfg

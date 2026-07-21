@@ -2,12 +2,14 @@
 
 `--inspect` probes the downloaded frontends with onnxruntime and pins the
 mel/embedding arithmetic the ww_v1.json sidecar and the Go runtime depend on.
-The ACAV negative-features file is ~16 GB, so this script only prints the
-download command for it (a one-time GPU-machine action).
+The ACAV negative-features file is ~16 GB, so it is only fetched with an
+explicit `--acav` (a one-time GPU-machine action); by default the script just
+prints the command.
 """
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 import numpy as np
@@ -15,6 +17,7 @@ import onnxruntime as ort
 from openwakeword import FEATURE_MODELS
 from openwakeword.utils import download_file
 
+from astra_ml.models.ww import EMB_DIM, HEAD_FRAMES
 from astra_ml.training.ww_config import load_ww_config
 
 ACAV_URL = (
@@ -43,6 +46,31 @@ def download(urls: list[str], dest: Path) -> None:
             print(f"exists: {target}")
         else:
             download_file(url, str(dest))
+
+
+def load_acav(path: Path) -> np.ndarray:
+    """Memory-mapped, validated ACAV feature rows (float16 [N, 16, 96]).
+
+    A killed curl leaves a zero/partial file that `exists()` happily passes, so
+    every consumer (download, train, eval) loads through this check instead of
+    a bare np.load.
+    """
+    hint = f"delete {path} and re-run: uv run python -m astra_ml.data.oww_assets --acav"
+    try:
+        arr = np.load(path, mmap_mode="r")
+    except Exception as err:
+        raise ValueError(f"unreadable ACAV file {path} ({err}); {hint}") from err
+    if arr.dtype != np.float16 or arr.ndim != 3 or arr.shape[1:] != (HEAD_FRAMES, EMB_DIM):
+        raise ValueError(f"unexpected ACAV file {arr.dtype} {arr.shape} at {path}; {hint}")
+    return arr
+
+
+def download_acav(dest: Path) -> None:
+    """Resumable 16 GB fetch; curl -C - continues a partial file after interruption."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["curl", "-L", "-C", "-", "-o", str(dest), ACAV_URL], check=True)
+    arr = load_acav(dest)
+    print(f"acav ok: {arr.shape[0]} rows")
 
 
 def inspect_frontends(frontends_dir: Path) -> dict:
@@ -99,6 +127,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("configs/ww_v1.yaml"))
     parser.add_argument("--inspect", action="store_true", help="probe frontend arithmetic")
+    parser.add_argument(
+        "--acav", action="store_true", help="download ACAV negative features (~16 GB, resumable)"
+    )
     args = parser.parse_args()
     cfg = load_ww_config(args.config)
 
@@ -107,9 +138,11 @@ def main() -> None:
         download(voice_urls(name), cfg.data.voices_dir)
 
     if not cfg.data.acav_features.exists():
-        cfg.data.acav_features.parent.mkdir(parents=True, exist_ok=True)
-        print("\nACAV negative features (~16 GB) not present. On the GPU machine run:")
-        print(f"  curl -L -o {cfg.data.acav_features} '{ACAV_URL}'")
+        if args.acav:
+            download_acav(cfg.data.acav_features)
+        else:
+            print("\nACAV negative features (~16 GB) not present. On the GPU machine run:")
+            print(f"  uv run python -m astra_ml.data.oww_assets --acav")
 
     if args.inspect:
         info = inspect_frontends(cfg.data.frontends_dir)

@@ -29,7 +29,14 @@ import torch
 from torch.utils.tensorboard import SummaryWriter
 
 from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
-from astra_ml.data.ww_augment import augment_clip, augment_user_clip, load_mono, scan_wavs
+from astra_ml.data.oww_assets import load_acav
+from astra_ml.data.ww_augment import (
+    augment_clip,
+    augment_user_clip,
+    load_mono,
+    scan_wavs,
+    scan_wavs_in_folds,
+)
 from astra_ml.models.ww import WwHead
 from astra_ml.training.ww_config import WwConfig, load_ww_config
 
@@ -37,11 +44,10 @@ INT16_SCALE = 32767.0  # frontend consumes int16-range floats
 JITTER_OFFSETS = (0, 800, 1600)  # word end at window end, -50 ms, -100 ms
 ACAV_VAL_ROWS = 100_000
 SCORE_STEPS_PER_HOUR = 16000 * 3600 / 1280  # 45k 80 ms chunks; must match ww_eval cadence
-# ww_eval scores every 1280 samples (80 ms). Sampling local negatives at 1.0 s left the model
-# blind to 12 of every 13 alignments it is graded on: 4 windows per 5 s clip at train time vs 38
-# at eval. ponytail: 160 ms, not the full 80 ms, to keep the pool ~4x smaller; drop to 1280 if
-# false accepts still cluster at odd offsets.
-LOCAL_NEG_HOP_S = 0.16
+# Matches ww_eval's 1280-sample (80 ms) scoring cadence exactly. An earlier 0.16 s compromise
+# still left every other eval window at an untrained alignment, and false accepts stayed high
+# (59/hr), so the pool now covers every offset the model is graded on.
+LOCAL_NEG_HOP_S = 0.08
 
 
 def pick_device() -> torch.device:
@@ -93,11 +99,13 @@ def _read_recordings(cfg: WwConfig) -> list[Path]:
         ]
 
 
-def _local_negative_windows(frontend: WwFrontend, dirs: list[Path]) -> np.ndarray:
+def _local_negative_windows(
+    frontend: WwFrontend, dirs: list[Path], folds: list[int] | None = None
+) -> np.ndarray:
     ws = frontend.cfg.window_samples
     hop = int(LOCAL_NEG_HOP_S * 16000)
     feats = []
-    for wav in scan_wavs(dirs):
+    for wav in scan_wavs_in_folds(dirs, folds or []):
         audio = load_mono(wav)
         for start in range(0, max(1, len(audio) - ws + 1), hop):
             chunk = audio[start : start + ws]
@@ -113,7 +121,9 @@ def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
     if frontend is None:
         frontend = WwFrontend.from_onnx(cfg.data.frontends_dir, DEFAULT_FRONTEND)
     rng = np.random.default_rng(cfg.training.seed)
-    noise_paths = scan_wavs(cfg.augment.noise_dirs)
+    # same folds as the negatives: any audio training touches, in any role, must stay out of
+    # eval.fa_folds. Augmentation noise counts — it is mixed under every positive.
+    noise_paths = scan_wavs_in_folds(cfg.augment.noise_dirs, cfg.data.negative_folds)
     rir_paths = scan_wavs([cfg.augment.rir_dir]) if cfg.augment.rir_dir.exists() else []
     groups = _read_tts_manifest(cfg)
 
@@ -150,7 +160,14 @@ def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
         "negatives_adv": np.concatenate(tts_feats(groups["adversarial"], augment=True)).astype(
             np.float16
         ),
-        "negatives_local": _local_negative_windows(frontend, cfg.data.negative_audio_dirs),
+        "negatives_local": _local_negative_windows(
+            frontend, cfg.data.negative_audio_dirs, cfg.data.negative_folds
+        ),
+        # held-out folds of the same corpora ww_eval measures FA on, so val FP tracks the
+        # gate instead of ACAV's much easier distribution (2.2 est fa/hr vs 59 measured)
+        "negatives_local_val": _local_negative_windows(
+            frontend, cfg.data.negative_audio_dirs, cfg.data.negative_val_folds
+        ),
     }
     for name, arr in arrays.items():
         np.save(cache / f"{name}.npy", arr)
@@ -176,8 +193,10 @@ class FeaturePools:
         n_adv_val = len(adv) // 10
         self.adv, self.adv_val = adv[perm[n_adv_val:]], adv[perm[:n_adv_val]]
         self.local = np.load(cache / "negatives_local.npy")
+        local_val_path = cache / "negatives_local_val.npy"
+        self.local_val = np.load(local_val_path) if local_val_path.exists() else self.pos[:0]
         if cfg.data.acav_features.exists():
-            acav = np.load(cfg.data.acav_features, mmap_mode="r")
+            acav = load_acav(cfg.data.acav_features)
             n_train = max(0, len(acav) - ACAV_VAL_ROWS)
             self.acav = acav[: min(n_train, cfg.data.acav_subsample)]
             self.acav_val = acav[n_train:]
@@ -234,13 +253,23 @@ def train(cfg: WwConfig) -> Path:
     # from step 0 and carries no signal for checkpoint selection. Use the full ACAV val tail:
     # resolving the FP rate the gate demands (~1e-5) needs every negative we can afford.
     val_neg = torch.from_numpy(
-        np.concatenate([np.asarray(pools.acav_val), pools.adv_val]).astype(np.float32)
+        np.concatenate(
+            [np.asarray(pools.acav_val), pools.adv_val, pools.local_val]
+        ).astype(np.float32)
     )
+    # Scored separately, not just folded into val_neg: this is the only pool drawn from the same
+    # corpora ww_eval measures FA on, and ACAV outnumbers it ~6:1, so a combined rate stays
+    # ACAV-dominated and keeps reporting the optimistic number.
+    val_neg_fa = torch.from_numpy(np.asarray(pools.local_val).astype(np.float32))
     # Select at the operating point the product gate actually demands, not a round number.
     # eval.max_fa_per_hour=0.5 over 45k score steps/hour => ~1.1e-5 per-window FP. A val FP rate
     # of 4e-4 "looks like zero" and is 36x too high; only FA/hour makes that legible.
     target_fpr = cfg.eval.max_fa_per_hour / SCORE_STEPS_PER_HOUR
+    # est_fa_per_hour is read at the shipping threshold and ignores patience_frames, so it is an
+    # upper bound whenever patience > 1 (consecutive-frame runs only ever remove triggers).
+    pp_threshold = cfg.postproc.threshold
     print(f"target fpr {target_fpr:.2e} ({cfg.eval.max_fa_per_hour} fa/hr), val_neg {len(val_neg)}")
+    print(f"fa-domain val pool: {len(val_neg_fa)} windows @ threshold {pp_threshold}")
 
     model = WwHead(t.layer_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=t.lr)
@@ -284,14 +313,23 @@ def train(cfg: WwConfig) -> Path:
                 score = (pos_scores > thresh).float().mean().item()
             else:
                 score = recall
+            # FA estimated on held-out folds of the eval corpora; falls back to the mixed pool
+            # when no folds are configured, where it stays optimistic.
+            fa_scores = val_neg_fa if len(val_neg_fa) else val_neg
+            fa_fp = (
+                (_predict(model, fa_scores, device) >= pp_threshold).float().mean().item()
+                if len(fa_scores)
+                else 0.0
+            )
+            est_fa = fa_fp * SCORE_STEPS_PER_HOUR
             writer.add_scalar("val/recall", recall, step)
             writer.add_scalar("val/fp_rate", fp, step)
             writer.add_scalar("val/recall_at_target_fpr", score, step)
             # the only val number directly comparable to the eval.max_fa_per_hour gate
-            writer.add_scalar("val/est_fa_per_hour", fp * SCORE_STEPS_PER_HOUR, step)
+            writer.add_scalar("val/est_fa_per_hour", est_fa, step)
             print(
                 f"step {step}: loss {loss.item():.4f} recall {recall:.3f} "
-                f"fp {fp:.5f} (~{fp * SCORE_STEPS_PER_HOUR:.1f} fa/hr) recall@fpr {score:.3f}"
+                f"fp {fp:.5f} (~{est_fa:.1f} fa/hr) recall@fpr {score:.3f}"
             )
             if score > best_score:
                 best_score = score

@@ -12,6 +12,8 @@ data:
   acav_features: datasets/oww_negatives/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
   acav_subsample: 2000000
   negative_audio_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
+  negative_folds: [1, 2, 3]      # ESC-50 official folds; train
+  negative_val_folds: [4]        # held out -> val/est_fa_per_hour
   recordings_root: datasets/ww_recordings
   frozen_test_sessions: [quiet_near_0719, far_noise_0719]  # never trained on or tuned against
   family_sessions: [family_female_0719]                    # eval-only
@@ -49,6 +51,7 @@ gating:
 
 eval:
   fa_audio_dirs: [datasets/chime_prepared/backgrounds, datasets/ESC-50-master/audio]
+  fa_folds: [5]                  # never trained on; the honest FA number
   recall_floor_quiet: 0.95
   recall_floor_noisy: 0.80
   max_fa_per_hour: 0.5

@@ -3,6 +3,7 @@
 import csv
 
 import numpy as np
+import pytest
 import soundfile as sf
 import torch
 from test_ww_frontend import fake_embed, fake_melspec
@@ -146,3 +147,51 @@ def test_train_writes_loadable_checkpoint(ww_cfg, capsys):
     model = load_head(best)
     out = model(torch.zeros(2, HEAD_FRAMES, EMB_DIM))
     assert out.shape == (2,)
+
+
+def test_config_rejects_overlapping_folds(tmp_path):
+    # a fold in two roles silently restores the leak the split exists to remove
+    from astra_ml.training.ww_config import WwDataConfig, WwEvalConfig, _check_folds_disjoint
+
+    data = WwDataConfig(
+        frontends_dir=tmp_path, voices_dir=tmp_path, voices=[], tts_out=tmp_path,
+        spellings=[], n_positives=0, n_positives_val=0, adversarial_phrases=[],
+        n_adversarial_per_phrase=0, acav_features=tmp_path, acav_subsample=0,
+        negative_audio_dirs=[], recordings_root=tmp_path,
+        negative_folds=[1, 2, 3], negative_val_folds=[4],
+    )
+    ok = WwEvalConfig([], 0.95, 0.8, 0.5, 500.0, fa_folds=[5])
+    _check_folds_disjoint(data, ok)  # disjoint: fine
+
+    leaky = WwEvalConfig([], 0.95, 0.8, 0.5, 500.0, fa_folds=[3, 5])
+    with pytest.raises(ValueError, match="negative_folds and fa_folds share fold"):
+        _check_folds_disjoint(data, leaky)
+
+
+def test_precompute_writes_held_out_local_val_pool(ww_cfg, tmp_path):
+    neg = tmp_path / "neg"
+    neg.mkdir()
+    # two ESC-50-named clips, one in a train fold and one in the val fold
+    for fold in (1, 4):
+        sf.write(neg / f"{fold}-1000-A-0.wav", np.zeros(int(SR * 3.0), dtype=np.float32), SR)
+    ww_cfg.data.negative_audio_dirs = [neg]
+    ww_cfg.data.negative_folds = [1]
+    ww_cfg.data.negative_val_folds = [4]
+    _write_tts_tree(ww_cfg)
+    _write_recordings(ww_cfg)
+
+    cache = precompute(ww_cfg, frontend=WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND))
+    train_neg = np.load(cache / "negatives_local.npy")
+    val_neg = np.load(cache / "negatives_local_val.npy")
+    # both folds yield windows, and the val pool exists so est_fa_per_hour has a domain to score
+    assert len(train_neg) > 0
+    assert len(val_neg) > 0
+    assert train_neg.shape[1:] == val_neg.shape[1:] == (HEAD_FRAMES, EMB_DIM)
+
+
+def test_feature_pools_rejects_corrupt_acav(ww_cfg):
+    # a killed curl leaves a partial file that exists() passes; fail loudly, not mid-train
+    _write_feature_cache(ww_cfg)
+    ww_cfg.data.acav_features.write_bytes(b"not an npy file")
+    with pytest.raises(ValueError, match="ACAV"):
+        FeaturePools(ww_cfg, seed=0)

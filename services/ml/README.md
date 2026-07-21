@@ -43,8 +43,8 @@ Config: `configs/ww_v1.yaml`. Steps 1, 2 and recording run anywhere; generation
 at scale, precompute, and training belong on the GPU machine.
 
 ```sh
-# 1. frontends + piper voice (also prints the ~16 GB ACAV negatives curl command)
-uv run python -m astra_ml.data.oww_assets --inspect
+# 1. frontends + piper voice; --acav also fetches the ~16 GB ACAV negatives (GPU machine only)
+uv run python -m astra_ml.data.oww_assets --inspect --acav
 
 # 2. pronunciation smoke test — listen to a few clips per spelling, adjust data.spellings
 uv run python -m astra_ml.data.ww_generate --smoke 4   # datasets/ww_tts/smoke/<spelling>/

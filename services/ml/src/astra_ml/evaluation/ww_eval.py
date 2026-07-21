@@ -29,9 +29,15 @@ import numpy as np
 import torch
 
 from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
-from astra_ml.data.ww_augment import add_noise, load_mono, scan_wavs
+from astra_ml.data.oww_assets import load_acav
+from astra_ml.data.ww_augment import add_noise, load_mono, scan_wavs_in_folds
 from astra_ml.postproc_ww import WwPostprocConfig, WwPostprocessor
-from astra_ml.training.train_ww import INT16_SCALE, load_head
+from astra_ml.training.train_ww import (
+    ACAV_VAL_ROWS,
+    INT16_SCALE,
+    SCORE_STEPS_PER_HOUR,
+    load_head,
+)
 from astra_ml.training.ww_config import WwConfig, load_ww_config
 
 SR = 16000
@@ -123,6 +129,27 @@ def fa_per_hour(score_streams: list[np.ndarray], pp_cfg: WwPostprocConfig) -> fl
     return triggers / hours if hours else 0.0
 
 
+@torch.no_grad()
+def acav_est_fa_per_hour(cfg: WwConfig, head, threshold: float) -> float | None:
+    """Windowed FP rate on the ACAV val tail at the shipping threshold, scaled to fa/hr.
+
+    Same held-out rows train_ww validates on, so train and eval numbers are
+    comparable. Ignores patience_frames (upper bound). Reported, never gated —
+    the fa_per_hour gate stays on real streamed audio.
+    """
+    if not cfg.data.acav_features.exists():
+        return None
+    acav = load_acav(cfg.data.acav_features)
+    tail = acav[max(0, len(acav) - ACAV_VAL_ROWS) :]
+    if not len(tail):
+        return None
+    fp = 0
+    for i in range(0, len(tail), 4096):
+        block = torch.from_numpy(np.asarray(tail[i : i + 4096]).astype(np.float32))
+        fp += int((head(block) >= threshold).sum())
+    return fp / len(tail) * SCORE_STEPS_PER_HOUR
+
+
 def load_recall_clips(cfg: WwConfig) -> dict[str, list[np.ndarray]]:
     """Category -> clips. Uses recordings when present, else TTS val fallback."""
     split_manifest = cfg.data.recordings_root / "manifest_split.csv"
@@ -169,7 +196,7 @@ def collect_streams(cfg: WwConfig, frontend: WwFrontend, head) -> dict:
     category("family", clips["eval_only"], noisy=False)
 
     fa_streams = []
-    for wav in scan_wavs(cfg.eval.fa_audio_dirs):
+    for wav in scan_wavs_in_folds(cfg.eval.fa_audio_dirs, cfg.eval.fa_folds):
         fa_streams.append(stream_scores(frontend, head, load_mono(wav)))
     return {"recall": streams, "word_end": word_end, "fa": fa_streams}
 
@@ -225,6 +252,7 @@ def main() -> None:
 
     collected = collect_streams(cfg, frontend, head)
     report = build_report(collected, pp_cfg, cfg)
+    report["est_fa_per_hour_acav"] = acav_est_fa_per_hour(cfg, head, pp_cfg.threshold)
     out = cfg.training.runs_dir / "ww_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")

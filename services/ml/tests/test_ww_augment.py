@@ -1,5 +1,7 @@
 """Tests for wake-word augmentation on synthetic tones."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -13,7 +15,9 @@ from astra_ml.data.ww_augment import (
     augment_user_clip,
     pitch_shift,
     scan_wavs,
+    scan_wavs_in_folds,
     speed_perturb,
+    wav_fold,
 )
 from astra_ml.training.ww_config import WwAugmentConfig
 
@@ -122,3 +126,34 @@ def test_load_mono_resamples(tmp_path):
     sf.write(path, np.zeros(22050, dtype=np.float32), 22050)
     audio = ww_augment.load_mono(path)
     assert len(audio) == SR
+
+
+def test_wav_fold_reads_esc50_naming():
+    # ESC-50 encodes its official fold as the leading digit of the filename
+    assert wav_fold(Path("4-100032-A-0.wav"), index=0) == 4
+    assert wav_fold(Path("1-100038-A-14.wav"), index=99) == 1
+
+
+def test_wav_fold_falls_back_to_position_for_unfoldered_corpora():
+    # chime backgrounds carry no fold; index decides, and it must stay in 1..5
+    folds = [wav_fold(Path(f"chime_bg_{i:03d}.wav"), index=i) for i in range(7)]
+    assert folds == [1, 2, 3, 4, 5, 1, 2]
+
+
+def test_scan_wavs_in_folds_splits_disjointly(tmp_path):
+    for fold in (1, 2, 3, 4, 5):
+        for take in ("A", "B"):
+            sf.write(tmp_path / f"{fold}-1000-{take}-0.wav", np.zeros(16, dtype=np.float32), SR)
+    train = scan_wavs_in_folds([tmp_path], [1, 2, 3])
+    val = scan_wavs_in_folds([tmp_path], [4])
+    fa = scan_wavs_in_folds([tmp_path], [5])
+    assert len(train) == 6 and len(val) == 2 and len(fa) == 2
+    # the point of the split: no file may appear in two roles
+    assert not ({p.name for p in train} & {p.name for p in fa})
+    assert not ({p.name for p in val} & {p.name for p in fa})
+
+
+def test_scan_wavs_in_folds_without_folds_returns_everything(tmp_path):
+    sf.write(tmp_path / "1-1000-A-0.wav", np.zeros(16, dtype=np.float32), SR)
+    sf.write(tmp_path / "5-1000-A-0.wav", np.zeros(16, dtype=np.float32), SR)
+    assert len(scan_wavs_in_folds([tmp_path], [])) == 2
