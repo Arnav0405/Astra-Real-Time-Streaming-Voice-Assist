@@ -41,7 +41,7 @@ training:
   user_positive_frac: 0.5  # was effectively 0.048 when TTS and user shared one pool
 
 postproc:
-  threshold: 0.6
+  threshold: 0.3
   patience_frames: 1
   refractory_seconds: 2.0
 
