@@ -1,0 +1,64 @@
+{
+  "sample_rate": 16000,
+  "graph": "merged",
+  "chunk_samples": 1280,
+  "window_samples": 31840,
+  "input_scale": "int16",
+  "mel": {
+    "bins": 32,
+    "hop_samples": 160,
+    "window_samples": 640,
+    "lookback_samples": 480,
+    "frames_per_chunk": 8,
+    "window_frames_total": 196,
+    "transform": {
+      "scale": 0.1,
+      "offset": 2.0
+    }
+  },
+  "embedding": {
+    "window_frames": 76,
+    "stride_frames": 8,
+    "dim": 96
+  },
+  "head": {
+    "input_frames": 16
+  },
+  "io": {
+    "merged": {
+      "input": "audio",
+      "input_shape": [
+        1,
+        31840
+      ],
+      "output": "prob"
+    },
+    "chain": {
+      "melspec": {
+        "file": "ww_v1_melspec.onnx",
+        "input": "input",
+        "output": "output"
+      },
+      "embedding": {
+        "file": "ww_v1_embedding.onnx",
+        "input": "input_1",
+        "output": "conv2d_19"
+      },
+      "head": {
+        "file": "ww_v1_head.onnx",
+        "input": "emb",
+        "output": "prob"
+      }
+    }
+  },
+  "recommended_threshold": 0.3,
+  "postproc": {
+    "patience_frames": 1,
+    "refractory_frames": 100
+  },
+  "gating": {
+    "preroll_frames": 50,
+    "partial_chunk": "drop"
+  },
+  "opset": 13
+}
