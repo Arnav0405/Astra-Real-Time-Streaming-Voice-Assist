@@ -1,0 +1,109 @@
+{
+  "best": {
+    "threshold": 0.6,
+    "patience_frames": 1,
+    "recall_quiet": 0.96,
+    "recall_noisy": 0.94,
+    "recall_family": 0.5333333333333333,
+    "fa_per_hour": 59.18762088974855,
+    "latency_ms_median": 320.0,
+    "refractory_frames": 100
+  },
+  "floors": {
+    "recall_quiet": 0.95,
+    "recall_noisy": 0.8
+  },
+  "combos_scored": 42,
+  "results": [
+    {
+      "threshold": 0.95,
+      "patience_frames": 3,
+      "recall_quiet": 0.8,
+      "recall_noisy": 0.68,
+      "recall_family": 0.2,
+      "fa_per_hour": 4.1779497098646035,
+      "latency_ms_median": 900.0
+    },
+    {
+      "threshold": 0.9,
+      "patience_frames": 3,
+      "recall_quiet": 0.84,
+      "recall_noisy": 0.7,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 9.052224371373308,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.85,
+      "patience_frames": 3,
+      "recall_quiet": 0.88,
+      "recall_noisy": 0.7,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 10.444874274661508,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.8,
+      "patience_frames": 3,
+      "recall_quiet": 0.9,
+      "recall_noisy": 0.72,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 11.14119922630561,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.75,
+      "patience_frames": 3,
+      "recall_quiet": 0.9,
+      "recall_noisy": 0.74,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 11.83752417794971,
+      "latency_ms_median": 970.0
+    },
+    {
+      "threshold": 0.95,
+      "patience_frames": 2,
+      "recall_quiet": 0.88,
+      "recall_noisy": 0.74,
+      "recall_family": 0.2,
+      "fa_per_hour": 13.23017408123791,
+      "latency_ms_median": 1000.0
+    },
+    {
+      "threshold": 0.7,
+      "patience_frames": 3,
+      "recall_quiet": 0.9,
+      "recall_noisy": 0.76,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 13.578336557059961,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.65,
+      "patience_frames": 3,
+      "recall_quiet": 0.9,
+      "recall_noisy": 0.76,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 14.622823984526113,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.6,
+      "patience_frames": 3,
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.78,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 15.319148936170214,
+      "latency_ms_median": 1080.0
+    },
+    {
+      "threshold": 0.55,
+      "patience_frames": 3,
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.82,
+      "recall_family": 0.26666666666666666,
+      "fa_per_hour": 16.711798839458414,
+      "latency_ms_median": 1140.0
+    }
+  ]
+}

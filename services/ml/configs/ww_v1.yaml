@@ -23,12 +23,12 @@ augment:
   snr_db_range: [3.0, 25.0]
   noise_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
   user_pitch_semitones: [-2.0, 2.0]
-  user_speed_range: [0.9, 1.1]
-  augment_rounds_user: 20
+  user_speed_range: [0.8, 1.1]
+  augment_rounds_user: 25
 
 training:
   batch_size: 1024
-  steps: 20000
+  steps: 30000
   lr: 1.0e-3
   layer_size: 128
   max_negative_weight: 1500
@@ -39,8 +39,8 @@ training:
   user_positive_frac: 0.5  # was effectively 0.048 when TTS and user shared one pool
 
 postproc:
-  threshold: 0.5
-  patience_frames: 2
+  threshold: 0.95
+  patience_frames: 3
   refractory_seconds: 2.0
 
 gating:

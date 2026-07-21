@@ -1,22 +1,22 @@
 {
   "postproc": {
-    "threshold": 0.5,
-    "patience_frames": 2,
+    "threshold": 0.95,
+    "patience_frames": 3,
     "refractory_frames": 100
   },
-  "recall_quiet": 0.76,
-  "recall_noisy": 0.48,
-  "recall_test": 0.68,
-  "recall_family": 0.13333333333333333,
+  "recall_quiet": 0.8,
+  "recall_noisy": 0.68,
+  "recall_test": 0.42,
+  "recall_family": 0.2,
   "lead_in_false_accepts": 0,
-  "fa_per_hour": 56.40232108317215,
+  "fa_per_hour": 4.1779497098646035,
   "fa_hours": 2.8722222222222222,
-  "latency_ms_median": 340.0,
-  "latency_ms_p95": 1439.0,
+  "latency_ms_median": 900.0,
+  "latency_ms_p95": 1527.0,
   "gates": {
     "recall_quiet": false,
     "recall_noisy": false,
     "fa_per_hour": false,
-    "latency": true
+    "latency": false
   }
 }
