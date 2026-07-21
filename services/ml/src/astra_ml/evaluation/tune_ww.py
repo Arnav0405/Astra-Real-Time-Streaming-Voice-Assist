@@ -123,7 +123,9 @@ def main() -> None:
             "recall_noisy": cfg.eval.recall_floor_noisy,
         },
         "combos_scored": len(results),
-        "results": sorted(results, key=lambda r: r["fa_per_hour"])[:10],
+        # NOT a ranking — lowest-FA combos, which are the most conservative and worst-recall
+        # on the grid. The setting to ship is "best" above; this list is for seeing the curve.
+        "lowest_fa_combos_diagnostic_only": sorted(results, key=lambda r: r["fa_per_hour"])[:10],
     }
     out = cfg.training.runs_dir / "tune_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
