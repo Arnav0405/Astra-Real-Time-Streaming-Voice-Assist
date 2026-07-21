@@ -65,8 +65,21 @@ def load_acav(path: Path) -> np.ndarray:
     return arr
 
 
-def download_acav(dest: Path) -> None:
-    """Resumable 16 GB fetch; curl -C - continues a partial file after interruption."""
+def ensure_acav(dest: Path) -> None:
+    """Download/resume the ACAV features unless a *valid* file is already there.
+
+    A bare exists() check is not enough: an interrupted curl leaves a partial
+    file that exists() passes, which would silently skip the download.
+    """
+    if dest.exists():
+        try:
+            arr = load_acav(dest)
+            print(f"acav ok: {arr.shape[0]} rows (already downloaded)")
+            return
+        except ValueError as err:
+            if "unexpected ACAV file" in str(err):
+                raise  # complete but wrong contents; resuming would only append garbage
+            print(f"partial ACAV file, resuming download ({err})")
     dest.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["curl", "-L", "-C", "-", "-o", str(dest), ACAV_URL], check=True)
     arr = load_acav(dest)
@@ -137,12 +150,11 @@ def main() -> None:
     for name in cfg.data.voices:
         download(voice_urls(name), cfg.data.voices_dir)
 
-    if not cfg.data.acav_features.exists():
-        if args.acav:
-            download_acav(cfg.data.acav_features)
-        else:
-            print("\nACAV negative features (~16 GB) not present. On the GPU machine run:")
-            print(f"  uv run python -m astra_ml.data.oww_assets --acav")
+    if args.acav:
+        ensure_acav(cfg.data.acav_features)
+    elif not cfg.data.acav_features.exists():
+        print("\nACAV negative features (~16 GB) not present. On the GPU machine run:")
+        print("  uv run python -m astra_ml.data.oww_assets --acav")
 
     if args.inspect:
         info = inspect_frontends(cfg.data.frontends_dir)
