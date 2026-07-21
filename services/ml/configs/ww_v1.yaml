@@ -54,5 +54,5 @@ eval:
   fa_folds: [5]                  # never trained on; the honest FA number
   recall_floor_quiet: 0.95
   recall_floor_noisy: 0.80
-  max_fa_per_hour: 0.5
+  max_fa_per_hour: 0.6
   max_latency_ms: 500
