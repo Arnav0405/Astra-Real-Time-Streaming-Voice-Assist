@@ -249,24 +249,13 @@ def train(cfg: WwConfig) -> Path:
 
     pools = FeaturePools(cfg, t.seed)
     val_pos = torch.from_numpy(np.load(t.features_cache / "positives_val.npy").astype(np.float32))
-    # hard negatives (held-out adversarial phrases) alongside easy ACAV — ACAV alone scores 0 FP
-    # from step 0 and carries no signal for checkpoint selection. Use the full ACAV val tail:
-    # resolving the FP rate the gate demands (~1e-5) needs every negative we can afford.
     val_neg = torch.from_numpy(
         np.concatenate(
             [np.asarray(pools.acav_val), pools.adv_val, pools.local_val]
         ).astype(np.float32)
     )
-    # Scored separately, not just folded into val_neg: this is the only pool drawn from the same
-    # corpora ww_eval measures FA on, and ACAV outnumbers it ~6:1, so a combined rate stays
-    # ACAV-dominated and keeps reporting the optimistic number.
     val_neg_fa = torch.from_numpy(np.asarray(pools.local_val).astype(np.float32))
-    # Select at the operating point the product gate actually demands, not a round number.
-    # eval.max_fa_per_hour=0.5 over 45k score steps/hour => ~1.1e-5 per-window FP. A val FP rate
-    # of 4e-4 "looks like zero" and is 36x too high; only FA/hour makes that legible.
     target_fpr = cfg.eval.max_fa_per_hour / SCORE_STEPS_PER_HOUR
-    # est_fa_per_hour is read at the shipping threshold and ignores patience_frames, so it is an
-    # upper bound whenever patience > 1 (consecutive-frame runs only ever remove triggers).
     pp_threshold = cfg.postproc.threshold
     print(f"target fpr {target_fpr:.2e} ({cfg.eval.max_fa_per_hour} fa/hr), val_neg {len(val_neg)}")
     print(f"fa-domain val pool: {len(val_neg_fa)} windows @ threshold {pp_threshold}")
@@ -296,8 +285,6 @@ def train(cfg: WwConfig) -> Path:
         optimizer.step()
         scheduler.step()
         writer.add_scalar("loss/train", loss.item(), step)
-        # unweighted BCE is the only loss comparable across steps: loss/train is multiplied by a
-        # negative weight that ramps 1 -> max_negative_weight, so it rises even as the model improves.
         writer.add_scalar("loss/train_unweighted", raw.mean().item(), step)
 
         if step % t.val_every == 0 or step == t.steps:
