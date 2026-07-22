@@ -1,11 +1,5 @@
 """Grid-search the wake-word trigger knobs against the dev split.
 
-Score streams are computed once (the expensive part), then every
-threshold × patience combo is re-scored through the cheap postproc machine.
-Objective mirrors tune_postproc: lowest false-accepts/hour subject to the
-recall floors (quiet and noisy, on the "eval" split — never the frozen test
-sessions), tie-break lower median latency.
-
     uv run python -m astra_ml.evaluation.tune_ww --config configs/ww_v1.yaml \
         --checkpoint runs/ww/best.pt [--update-sidecar]
 """

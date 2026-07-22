@@ -1,9 +1,4 @@
 """Grid-search postproc knobs on the dev split against segment-level metrics.
-
-Objective: lowest false-alarms/hour among combos with segment recall >= --min-recall,
-ties broken by p90 onset latency. Inference runs once and is cached to .npz;
-re-runs sweep the grid without touching the model.
-
 Usage:
     uv run python -m astra_ml.evaluation.tune_postproc --config configs/vad_v1.yaml \
         --checkpoint runs/vad/best.pt [--update-sidecar]

@@ -1,10 +1,5 @@
 """Segment-level eval: score post-processed VAD events, not raw frame probs.
 
-Complements eval.py (frame-level, raw model quality). This measures what the
-user experiences after the postproc state machine: missed utterances, false
-alarms per hour, speech-onset latency. Postproc params come from the model
-sidecar JSON — the same file the Go runtime reads.
-
 Usage:
     uv run python -m astra_ml.evaluation.segment_eval --config configs/vad_v1.yaml \
         --checkpoint runs/vad/best.pt

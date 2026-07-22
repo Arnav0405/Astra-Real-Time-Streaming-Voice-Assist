@@ -1,24 +1,4 @@
-"""Wake-word evaluation: recall, false accepts per hour, detection latency.
-
-Replays audio through the full detection pipeline exactly as the Go runtime
-will run it: zero-initialized score window, 1280-sample chunk cadence, head
-score per chunk, WwPostprocessor triggers. Recall streams are built as
-lead-in silence + clip + tail so utterance-initial wake words are scored with
-the same cold-start window the runtime sees at VAD gate open.
-
-Categories:
-- recall_quiet / recall_noisy: user "eval"-split recordings, as-is vs mixed
-  with deterministic noise at 5 dB SNR
-- recall_test: frozen test sessions (the gate metric; never tuned against)
-- recall_family: eval_only sessions (reported, not gating)
-- fa_per_hour: triggers over eval.fa_audio_dirs streams, ungated (an honest
-  upper bound — VAD gating in production only removes candidates)
-
-Falls back to TTS val clips when no recordings exist (early dev only).
-
-    uv run python -m astra_ml.evaluation.ww_eval --config configs/ww_v1.yaml \
-        --checkpoint runs/ww/best.pt
-"""
+# RUN: uv run python -m astra_ml.evaluation.ww_eval --config configs/ww_v1.yaml --checkpoint runs/ww/best.pt
 
 import argparse
 import csv
