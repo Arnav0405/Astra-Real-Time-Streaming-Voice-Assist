@@ -46,15 +46,6 @@ def score_grid(collected: dict, refractory_frames: int) -> list[dict]:
                 pp_cfg,
                 min_frame=LEAD_IN_FRAMES,
             )
-            # Reported, never tuned against (eval_only by design). Present so a low
-            # recall_family can be read as threshold-sensitive or genuinely missed,
-            # before anyone spends hours regenerating TTS data to chase it.
-            recall_f, _, _ = recall_and_latency(
-                collected["recall"]["family"],
-                collected["word_end"]["family"],
-                pp_cfg,
-                min_frame=LEAD_IN_FRAMES,
-            )
             latencies = lat_q + lat_n
             results.append(
                 {
@@ -62,7 +53,6 @@ def score_grid(collected: dict, refractory_frames: int) -> list[dict]:
                     "patience_frames": patience,
                     "recall_quiet": recall_q,
                     "recall_noisy": recall_n,
-                    "recall_family": recall_f,
                     "fa_per_hour": fa_per_hour(collected["fa"], pp_cfg),
                     "latency_ms_median": float(np.median(latencies)) if latencies else None,
                 }

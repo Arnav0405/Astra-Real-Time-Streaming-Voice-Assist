@@ -133,7 +133,7 @@ def acav_est_fa_per_hour(cfg: WwConfig, head, threshold: float) -> float | None:
 def load_recall_clips(cfg: WwConfig) -> dict[str, list[np.ndarray]]:
     """Category -> clips. Uses recordings when present, else TTS val fallback."""
     split_manifest = cfg.data.recordings_root / "manifest_split.csv"
-    out: dict[str, list[np.ndarray]] = {"eval": [], "test": [], "eval_only": []}
+    out: dict[str, list[np.ndarray]] = {"eval": [], "test": []}
     if split_manifest.exists():
         with open(split_manifest) as f:
             for row in csv.DictReader(f):
@@ -173,7 +173,6 @@ def collect_streams(cfg: WwConfig, frontend: WwFrontend, head) -> dict:
     category("quiet", clips["eval"], noisy=False)
     category("noisy", clips["eval"], noisy=True)
     category("test", clips["test"], noisy=False)
-    category("family", clips["eval_only"], noisy=False)
 
     fa_streams = []
     for wav in scan_wavs_in_folds(cfg.eval.fa_audio_dirs, cfg.eval.fa_folds):

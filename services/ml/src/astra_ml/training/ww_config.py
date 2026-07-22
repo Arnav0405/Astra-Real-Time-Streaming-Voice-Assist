@@ -22,7 +22,6 @@ class WwDataConfig:
     negative_audio_dirs: list[Path]
     recordings_root: Path
     frozen_test_sessions: list[str] = field(default_factory=list)
-    family_sessions: list[str] = field(default_factory=list)
     # Disjoint folds over negative_audio_dirs. Training and eval read the same corpora,
     # so overlapping folds mean FA is measured on trained-on audio. Empty = no split.
     negative_folds: list[int] = field(default_factory=list)

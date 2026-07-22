@@ -16,7 +16,6 @@ data:
   negative_val_folds: [4]        # held out -> val/est_fa_per_hour
   recordings_root: datasets/ww_recordings
   frozen_test_sessions: [quiet_near_0719, far_noise_0719]  # never trained on or tuned against
-  family_sessions: [family_female_0719]                    # eval-only
 
 augment:
   rir_dir: datasets/source/RIRS_NOISES
@@ -33,7 +32,7 @@ training:
   steps: 30000
   lr: 1.5e-3
   layer_size: 256
-  max_negative_weight: 2000
+  max_negative_weight: 500
   val_every: 500
   seed: 1234
   features_cache: datasets/ww_features
@@ -41,7 +40,7 @@ training:
   user_positive_frac: 0.5  # was effectively 0.048 when TTS and user shared one pool
 
 postproc:
-  threshold: 0.6
+  threshold: 0.3
   patience_frames: 1
   refractory_seconds: 2.0
 

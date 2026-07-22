@@ -48,6 +48,9 @@ SCORE_STEPS_PER_HOUR = 16000 * 3600 / 1280  # 45k 80 ms chunks; must match ww_ev
 # still left every other eval window at an untrained alignment, and false accepts stayed high
 # (59/hr), so the pool now covers every offset the model is graded on.
 LOCAL_NEG_HOP_S = 0.08
+# Checkpoint-selection FPR. The shipping gate (~1.3e-5) over ~1e5 val windows puts the
+# quantile between the top two negative scores, so "best" was decided by noise.
+SELECT_FPR = 1e-3
 
 
 def pick_device() -> torch.device:
@@ -255,9 +258,8 @@ def train(cfg: WwConfig) -> Path:
         ).astype(np.float32)
     )
     val_neg_fa = torch.from_numpy(np.asarray(pools.local_val).astype(np.float32))
-    target_fpr = cfg.eval.max_fa_per_hour / SCORE_STEPS_PER_HOUR
     pp_threshold = cfg.postproc.threshold
-    print(f"target fpr {target_fpr:.2e} ({cfg.eval.max_fa_per_hour} fa/hr), val_neg {len(val_neg)}")
+    print(f"select fpr {SELECT_FPR:.0e}, val_neg {len(val_neg)}")
     print(f"fa-domain val pool: {len(val_neg_fa)} windows @ threshold {pp_threshold}")
 
     model = WwHead(t.layer_size).to(device)
@@ -286,6 +288,9 @@ def train(cfg: WwConfig) -> Path:
         scheduler.step()
         writer.add_scalar("loss/train", loss.item(), step)
         writer.add_scalar("loss/train_unweighted", raw.mean().item(), step)
+        # the weight ramp grows the loss scale ~500x over the run; divide it out so the
+        # curve is comparable across steps
+        writer.add_scalar("loss/train_stationary", loss.item() / weights.mean().item(), step)
 
         if step % t.val_every == 0 or step == t.steps:
             model.eval()
@@ -293,25 +298,25 @@ def train(cfg: WwConfig) -> Path:
             neg_scores = _predict(model, val_neg, device)
             recall = (pos_scores >= 0.5).float().mean().item()
             fp = (neg_scores >= 0.5).float().mean().item() if len(neg_scores) else 0.0
-            # Select on recall at a fixed low FP rate, not at a fixed 0.5 threshold: the negative
-            # weight ramp shifts the score distribution every step, so 0.5 is a moving target.
-            if len(neg_scores):
-                thresh = torch.quantile(neg_scores, 1.0 - target_fpr).item()
+            # FA estimated on held-out folds of the eval corpora; falls back to the mixed pool
+            # when no folds are configured, where it stays optimistic.
+            fa_pool = val_neg_fa if len(val_neg_fa) else val_neg
+            fa_neg_scores = _predict(model, fa_pool, device)
+            fa_fp = (
+                (fa_neg_scores >= pp_threshold).float().mean().item() if len(fa_neg_scores) else 0.0
+            )
+            est_fa = fa_fp * SCORE_STEPS_PER_HOUR
+            # Select on the FA-domain pool, not the ACAV-dominated val_neg: the old score
+            # ignored the corpora the fa_per_hour gate measures, so est FA climbed
+            # 5 -> 200/hr across training while "best" kept improving.
+            if len(fa_neg_scores):
+                thresh = torch.quantile(fa_neg_scores, 1.0 - SELECT_FPR).item()
                 score = (pos_scores > thresh).float().mean().item()
             else:
                 score = recall
-            # FA estimated on held-out folds of the eval corpora; falls back to the mixed pool
-            # when no folds are configured, where it stays optimistic.
-            fa_scores = val_neg_fa if len(val_neg_fa) else val_neg
-            fa_fp = (
-                (_predict(model, fa_scores, device) >= pp_threshold).float().mean().item()
-                if len(fa_scores)
-                else 0.0
-            )
-            est_fa = fa_fp * SCORE_STEPS_PER_HOUR
             writer.add_scalar("val/recall", recall, step)
             writer.add_scalar("val/fp_rate", fp, step)
-            writer.add_scalar("val/recall_at_target_fpr", score, step)
+            writer.add_scalar("val/recall_at_select_fpr", score, step)
             # the only val number directly comparable to the eval.max_fa_per_hour gate
             writer.add_scalar("val/est_fa_per_hour", est_fa, step)
             print(
