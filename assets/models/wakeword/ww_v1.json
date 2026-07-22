@@ -51,10 +51,10 @@
       }
     }
   },
-  "recommended_threshold": 0.3,
+  "recommended_threshold": 0.85,
   "postproc": {
-    "patience_frames": 1,
-    "refractory_frames": 100
+    "patience_frames": 2,
+    "refractory_frames": 5000
   },
   "gating": {
     "preroll_frames": 50,

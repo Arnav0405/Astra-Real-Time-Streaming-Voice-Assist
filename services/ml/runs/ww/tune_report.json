@@ -1,11 +1,10 @@
 {
   "best": {
-    "threshold": 0.3,
-    "patience_frames": 1,
-    "recall_quiet": 0.9,
-    "recall_noisy": 0.86,
-    "recall_family": 0.3333333333333333,
-    "fa_per_hour": 89.8238747553816,
+    "threshold": 0.85,
+    "patience_frames": 2,
+    "recall_quiet": 0.96,
+    "recall_noisy": 0.9,
+    "fa_per_hour": 200.78277886497062,
     "latency_ms_median": 0.0,
     "refractory_frames": 100
   },
@@ -16,94 +15,84 @@
   "combos_scored": 42,
   "lowest_fa_combos_diagnostic_only": [
     {
-      "threshold": 0.85,
+      "threshold": 0.95,
       "patience_frames": 3,
-      "recall_quiet": 0.08,
-      "recall_noisy": 0.04,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 0.0,
-      "latency_ms_median": 0.0
+      "recall_quiet": 0.88,
+      "recall_noisy": 0.74,
+      "fa_per_hour": 59.8825831702544,
+      "latency_ms_median": 360.0
     },
     {
       "threshold": 0.9,
       "patience_frames": 3,
-      "recall_quiet": 0.06,
-      "recall_noisy": 0.02,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 0.0,
-      "latency_ms_median": 20.0
+      "recall_quiet": 0.88,
+      "recall_noisy": 0.8,
+      "fa_per_hour": 89.8238747553816,
+      "latency_ms_median": 320.0
     },
     {
-      "threshold": 0.95,
+      "threshold": 0.85,
       "patience_frames": 3,
-      "recall_quiet": 0.02,
-      "recall_noisy": 0.0,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 0.0,
-      "latency_ms_median": 20.0
+      "recall_quiet": 0.9,
+      "recall_noisy": 0.82,
+      "fa_per_hour": 116.2426614481409,
+      "latency_ms_median": 240.0
     },
     {
       "threshold": 0.8,
       "patience_frames": 3,
-      "recall_quiet": 0.1,
-      "recall_noisy": 0.08,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 1.761252446183953,
-      "latency_ms_median": 0.0
-    },
-    {
-      "threshold": 0.65,
-      "patience_frames": 3,
-      "recall_quiet": 0.2,
-      "recall_noisy": 0.2,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 3.522504892367906,
-      "latency_ms_median": 110.0
-    },
-    {
-      "threshold": 0.7,
-      "patience_frames": 3,
-      "recall_quiet": 0.18,
-      "recall_noisy": 0.14,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 3.522504892367906,
-      "latency_ms_median": 0.0
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.84,
+      "fa_per_hour": 125.04892367906065,
+      "latency_ms_median": 140.0
     },
     {
       "threshold": 0.75,
       "patience_frames": 3,
-      "recall_quiet": 0.12,
-      "recall_noisy": 0.1,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 3.522504892367906,
-      "latency_ms_median": 0.0
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.86,
+      "fa_per_hour": 139.13894324853229,
+      "latency_ms_median": 120.0
     },
     {
       "threshold": 0.95,
       "patience_frames": 2,
-      "recall_quiet": 0.04,
-      "recall_noisy": 0.04,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 3.522504892367906,
-      "latency_ms_median": 0.0
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.86,
+      "fa_per_hour": 139.13894324853229,
+      "latency_ms_median": 60.0
+    },
+    {
+      "threshold": 0.7,
+      "patience_frames": 3,
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.86,
+      "fa_per_hour": 154.99021526418787,
+      "latency_ms_median": 120.0
+    },
+    {
+      "threshold": 0.65,
+      "patience_frames": 3,
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.88,
+      "fa_per_hour": 165.55772994129157,
+      "latency_ms_median": 20.0
     },
     {
       "threshold": 0.6,
       "patience_frames": 3,
-      "recall_quiet": 0.3,
-      "recall_noisy": 0.22,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 5.283757338551859,
-      "latency_ms_median": 130.0
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.88,
+      "fa_per_hour": 167.31898238747553,
+      "latency_ms_median": 20.0
     },
     {
-      "threshold": 0.9,
-      "patience_frames": 2,
-      "recall_quiet": 0.14,
-      "recall_noisy": 0.04,
-      "recall_family": 0.06666666666666667,
-      "fa_per_hour": 5.283757338551859,
-      "latency_ms_median": 0.0
+      "threshold": 0.55,
+      "patience_frames": 3,
+      "recall_quiet": 0.92,
+      "recall_noisy": 0.92,
+      "fa_per_hour": 179.6477495107632,
+      "latency_ms_median": 10.0
     }
   ]
 }
