@@ -7,9 +7,6 @@ import (
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
 
-// Mode selects what arms an utterance. It is fixed per stream by the runtime
-// wiring (VAD-only vs wake-word), because in wake-word mode both a VAD
-// EventStart and a wake Event arrive and only the wake Event must arm.
 type Mode int
 
 const (

@@ -1,0 +1,5 @@
+{
+  "grace_frames": 15,
+  "min_utterance_frames": 15,
+  "max_utterance_frames": 1500
+}

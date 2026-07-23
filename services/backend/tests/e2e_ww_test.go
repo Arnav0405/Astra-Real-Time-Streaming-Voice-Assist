@@ -87,7 +87,7 @@ func TestEndToEndWakeWord(t *testing.T) {
 				mu.Lock()
 				wakes = append(wakes, e)
 				mu.Unlock()
-			})
+			}, nil)
 		return sink
 	}
 

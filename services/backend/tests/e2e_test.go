@@ -64,7 +64,7 @@ func TestEndToEndVad(t *testing.T) {
 			mu.Lock()
 			events = append(events, e)
 			mu.Unlock()
-		})
+		}, nil)
 		return sink
 	}
 
