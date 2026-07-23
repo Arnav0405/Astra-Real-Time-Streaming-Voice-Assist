@@ -25,6 +25,7 @@ type Sink struct {
 	newStep  func() (stepper, error)
 	pp       *postprocessor
 	onEvent  func(Event)
+	onFrame  func(uint64, []byte)
 
 	done  chan struct{}
 	fatal chan struct{}
@@ -32,17 +33,23 @@ type Sink struct {
 }
 
 // NewSink returns a VAD sink for one stream. onEvent nil means log events.
-func NewSink(streamID string, engine *Engine, cfg *Config, onEvent func(Event)) *Sink {
+// onFrame, if non-nil, is called once per frame with its seq and PCM (after any
+// event for that frame) — the seam the Phase 5 endpoint machine buffers from.
+func NewSink(streamID string, engine *Engine, cfg *Config, onEvent func(Event), onFrame func(uint64, []byte)) *Sink {
 	if onEvent == nil {
 		onEvent = func(e Event) {
 			log.Printf("stream %s: vad %s at frame %d", streamID, e.Type, e.Frame)
 		}
+	}
+	if onFrame == nil {
+		onFrame = func(uint64, []byte) {}
 	}
 	return &Sink{
 		streamID: streamID,
 		newStep:  func() (stepper, error) { s, err := engine.NewInferencer(); return s, err },
 		pp:       newPostprocessor(cfg),
 		onEvent:  onEvent,
+		onFrame:  onFrame,
 		done:     make(chan struct{}),
 		fatal:    make(chan struct{}),
 	}
@@ -73,11 +80,14 @@ func (s *Sink) Run(frames <-chan server.Frame) {
 			if failures >= maxConsecutiveFailures {
 				s.fail(fmt.Errorf("vad inference failed %d frames in a row: %w", failures, err))
 			}
-			continue
+		} else {
+			failures = 0
+			if ok {
+				s.onEvent(e)
+			}
 		}
-		failures = 0
-		if ok {
-			s.onEvent(e)
+		if s.onFrame != nil {
+			s.onFrame(f.Seq, f.PCM)
 		}
 	}
 	if s.err == nil {

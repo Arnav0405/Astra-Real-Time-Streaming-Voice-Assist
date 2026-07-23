@@ -48,6 +48,7 @@ type Sink struct {
 	ringSize int
 	onVad    func(vad.Event)
 	onWake   func(Event)
+	onFrame  func(uint64, []byte)
 
 	done  chan struct{}
 	fatal chan struct{}
@@ -55,8 +56,10 @@ type Sink struct {
 }
 
 // NewSink returns a wake-word sink for one stream. Nil callbacks log.
+// onFrame, if non-nil, is called once per frame with its seq and PCM (after any
+// event for that frame) — the seam the Phase 5 endpoint machine buffers from.
 func NewSink(streamID string, vadEngine *vad.Engine, vadCfg *vad.Config,
-	engine *Engine, cfg *Config, onVad func(vad.Event), onWake func(Event)) *Sink {
+	engine *Engine, cfg *Config, onVad func(vad.Event), onWake func(Event), onFrame func(uint64, []byte)) *Sink {
 	if onVad == nil {
 		onVad = func(e vad.Event) {
 			log.Printf("stream %s: vad %s at frame %d", streamID, e.Type, e.Frame)
@@ -66,6 +69,9 @@ func NewSink(streamID string, vadEngine *vad.Engine, vadCfg *vad.Config,
 		onWake = func(e Event) {
 			log.Printf("stream %s: wake at frame %d", streamID, e.Frame)
 		}
+	}
+	if onFrame == nil {
+		onFrame = func(uint64, []byte) {}
 	}
 	return &Sink{
 		streamID: streamID,
@@ -87,6 +93,7 @@ func NewSink(streamID string, vadEngine *vad.Engine, vadCfg *vad.Config,
 		ringSize: cfg.Gating.PrerollFrames + vadCfg.Postproc.MinSpeechFrames + 8,
 		onVad:    onVad,
 		onWake:   onWake,
+		onFrame:  onFrame,
 		done:     make(chan struct{}),
 		fatal:    make(chan struct{}),
 	}
@@ -170,6 +177,9 @@ func (s *Sink) Run(frames <-chan server.Frame) {
 			pp.gateReset()
 		case gate:
 			feed(frameIdx, f.Seq)
+		}
+		if s.onFrame != nil {
+			s.onFrame(f.Seq, f.PCM)
 		}
 	}
 	if s.err == nil {
