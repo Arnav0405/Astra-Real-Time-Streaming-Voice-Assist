@@ -258,6 +258,7 @@ def gen_e2e() -> None:
         if ev is not None:
             events[i] = {"type": ev[0], "frame": ev[1]}
             vad_events.append(list(ev))
+    vad_events.extend(list(ev) for ev in vpp.finish())
 
     # Wake pass: real merged model behind the gating reference.
     ww_sidecar = json.loads(ww_sidecar_path.read_text())
