@@ -8,6 +8,12 @@ room, mic, and day, so a per-clip split would leak train data into eval. Rules:
 - remaining sessions -> deterministic hash: ~1 in 5 to "eval", rest "train"
 
 Only "train" rows may enter training (pitch/speed-augmented there).
+
+--negative applies the identical rules to data.negative_recordings_root (the
+personal hard negatives). Their "train" rows become the negatives_user training
+pool; the eval/test rows become the speech false-accept set ww_eval gates on, so
+the number that measures "fires on any word I say" is measured on sessions
+training never saw.
 """
 
 import argparse
@@ -45,10 +51,13 @@ def load_manifest(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def write_split_manifest(config_path: Path) -> Path:
+def write_split_manifest(config_path: Path, negative: bool = False) -> Path:
     cfg = load_ww_config(config_path)
-    root = cfg.data.recordings_root
-    rows = assign_splits(load_manifest(root / "manifest.csv"), cfg.data.frozen_test_sessions)
+    if negative:
+        root, frozen = cfg.data.negative_recordings_root, cfg.data.frozen_negative_test_sessions
+    else:
+        root, frozen = cfg.data.recordings_root, cfg.data.frozen_test_sessions
+    rows = assign_splits(load_manifest(root / "manifest.csv"), frozen)
     out = root / "manifest_split.csv"
     with open(out, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
@@ -64,8 +73,13 @@ def write_split_manifest(config_path: Path) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("configs/ww_v1.yaml"))
+    parser.add_argument(
+        "--negative",
+        action="store_true",
+        help="split data.negative_recordings_root instead (hard negatives)",
+    )
     args = parser.parse_args()
-    write_split_manifest(args.config)
+    write_split_manifest(args.config, negative=args.negative)
 
 
 if __name__ == "__main__":

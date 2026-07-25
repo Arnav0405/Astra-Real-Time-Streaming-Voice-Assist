@@ -54,10 +54,19 @@ def score_grid(collected: dict, refractory_frames: int) -> list[dict]:
                     "recall_quiet": recall_q,
                     "recall_noisy": recall_n,
                     "fa_per_hour": fa_per_hour(collected["fa"], pp_cfg),
+                    "fa_per_hour_speech": (
+                        fa_per_hour(collected["fa_speech"], pp_cfg)
+                        if collected.get("fa_speech")
+                        else None
+                    ),
                     "latency_ms_median": float(np.median(latencies)) if latencies else None,
                 }
             )
     return results
+
+
+def _inf_if_none(value: float | None) -> float:
+    return float("inf") if value is None else value
 
 
 def pick_best(results: list[dict], floor_quiet: float, floor_noisy: float) -> dict:
@@ -67,11 +76,15 @@ def pick_best(results: list[dict], floor_quiet: float, floor_noisy: float) -> di
     if not ok:
         # nothing meets the floors: maximize recall instead so the report is useful
         return max(results, key=lambda r: r["recall_quiet"] + r["recall_noisy"])
+    # Speech FA leads: minimizing environmental FA alone is what picked a threshold that
+    # fires on any spoken word. With no speech set every key is inf and this degrades to
+    # the old environmental-FA ordering.
     return min(
         ok,
         key=lambda r: (
+            _inf_if_none(r.get("fa_per_hour_speech")),
             r["fa_per_hour"],
-            r["latency_ms_median"] if r["latency_ms_median"] is not None else float("inf"),
+            _inf_if_none(r["latency_ms_median"]),
         ),
     )
 
@@ -109,7 +122,9 @@ def main() -> None:
         "combos_scored": len(results),
         # NOT a ranking — lowest-FA combos, which are the most conservative and worst-recall
         # on the grid. The setting to ship is "best" above; this list is for seeing the curve.
-        "lowest_fa_combos_diagnostic_only": sorted(results, key=lambda r: r["fa_per_hour"])[:10],
+        "lowest_fa_combos_diagnostic_only": sorted(
+            results, key=lambda r: (_inf_if_none(r.get("fa_per_hour_speech")), r["fa_per_hour"])
+        )[:10],
     }
     out = cfg.training.runs_dir / "tune_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,112 @@
+# Personal hard-negative prompts for astra_ml.data.ww_record --negative.
+#
+# Say each line naturally, at the same distance and in the same room as the
+# matching positive session. Never say the wake word in a negative session.
+#
+# Blank lines and #-comments are skipped. Order is stable, so a long list can be
+# recorded across several sittings — the recorder resumes where it left off.
+#
+# Four groups, roughly in decreasing order of how much they matter:
+#   1. the adversarial_phrases list in your own voice (TTS already covers the
+#      phrases; what is missing is your channel saying them)
+#   2. phonetic neighbourhood — stressed /æ/-/ɑ/ onsets, str/st clusters, -ra endings
+#   3. connected speech, because that is the deployment condition
+#   4. counting and filler, the highest-frequency things a mic actually hears
+
+# --- 1. adversarial list, own voice ---
+astro
+extra
+astronaut
+master
+ad astra
+a strong
+nasa
+castra
+australia
+asthma
+
+# --- 2. phonetic neighbourhood ---
+after
+ask
+answer
+actually
+apple
+hasta
+pasta
+faster
+plaster
+disaster
+alabaster
+aster
+abstract
+athlete
+avocado
+stress
+strong
+strap
+straight
+start
+started
+star
+stars
+starter
+astride
+estimate
+extract
+extreme
+opera
+camera
+zebra
+cobra
+orchestra
+spectra
+sierra
+tundra
+umbrella
+Alexa
+hey Google
+okay computer
+
+# --- 3. connected speech ---
+what time is it
+turn the lights off
+play something else
+I think that went fine
+can you pass me that
+it is a bit cold in here
+we should probably leave soon
+that was a strange noise
+put the kettle on after this
+I asked her about it yesterday
+the extra one is on the counter
+my brother is an astronaut apparently
+she is a master at this
+remind me to call them back
+set a timer for ten minutes
+no I meant the other one
+that is a disaster waiting to happen
+read me the news
+add milk to the shopping list
+send a message to mum
+open the window a little
+how long does the train take
+I will start again from the top
+this is a normal sentence with no wake word in it
+
+# --- 4. counting and filler ---
+one two three four five
+six seven eight nine ten
+eleven twelve thirteen fourteen fifteen
+twenty thirty forty fifty
+uh
+um
+hmm
+yeah
+okay
+right
+sure
+no
+wait
+hello
+hello hello
+testing testing

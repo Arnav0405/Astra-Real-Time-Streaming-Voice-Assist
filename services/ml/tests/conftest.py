@@ -19,6 +19,7 @@ data:
   acav_subsample: 10
   negative_audio_dirs: []
   recordings_root: {root}/rec
+  negative_recordings_root: {root}/negrec
 augment:
   rir_dir: {root}/rir
   rir_prob: 0.5
@@ -28,6 +29,7 @@ augment:
   user_pitch_semitones: [-2.0, 2.0]
   user_speed_range: [0.9, 1.1]
   augment_rounds_user: 2
+  augment_rounds_user_negative: 2
 training:
   batch_size: 8
   steps: 6

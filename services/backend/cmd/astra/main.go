@@ -20,6 +20,7 @@ func main() {
 	wwConfig := flag.String("ww-config", "../../assets/models/wakeword/ww_v1.json", "path to wake-word sidecar config")
 	endpointConfig := flag.String("endpoint-config", "../../assets/configs/endpoint.json", "path to endpoint (utterance) config")
 	endpointWavDir := flag.String("endpoint-wav-dir", "", "if set, dump each closed utterance here as WAV (debug/verification)")
+	verbose := flag.Bool("verbose", false, "log the per-stream pipeline trace (VAD speech/silence, wake, utterance)")
 	flag.Parse()
 
 	if err := vad.Init(*ortLib); err != nil {
@@ -42,24 +43,61 @@ func main() {
 
 	// onUtterance for a stream: WAV dumper when -endpoint-wav-dir is set, else
 	// nil (the machine logs each utterance). Per-stream because the dumper owns
-	// its own filename counter.
+	// its own filename counter. Under -verbose, wrap it so the utterance end is
+	// always logged even when a WAV dumper is active.
 	makeOnUtterance := func(streamID string) func(endpoint.Utterance) {
-		if *endpointWavDir == "" {
-			return nil
+		var next func(endpoint.Utterance)
+		if *endpointWavDir != "" {
+			dump, err := endpoint.NewWavDumper(*endpointWavDir, streamID)
+			if err != nil {
+				log.Printf("stream %s: wav dumper disabled: %v", streamID, err)
+			} else {
+				next = dump
+			}
 		}
-		dump, err := endpoint.NewWavDumper(*endpointWavDir, streamID)
-		if err != nil {
-			log.Printf("stream %s: wav dumper disabled: %v", streamID, err)
-			return nil
+		if !*verbose {
+			return next
 		}
-		return dump
+		return func(u endpoint.Utterance) {
+			log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
+				streamID, u.FrameCount, u.StartSeq, u.EndSeq)
+			if next != nil {
+				next(u)
+			}
+		}
+	}
+
+	// Under -verbose, tee the VAD/wake events to the log before the endpoint
+	// machine consumes them (Phase 5 replaced the sinks' default loggers).
+	traceVad := func(streamID string, next func(vad.Event)) func(vad.Event) {
+		if !*verbose {
+			return next
+		}
+		return func(e vad.Event) {
+			switch e.Type {
+			case vad.EventStart:
+				log.Printf("[%s] VAD  ▶ SPEECH  (frame %d)", streamID, e.Frame)
+			case vad.EventEnd:
+				log.Printf("[%s] VAD  ■ silence (frame %d)", streamID, e.Frame)
+			}
+			next(e)
+		}
+	}
+	traceWake := func(streamID string, next func(wakeword.Event)) func(wakeword.Event) {
+		if !*verbose {
+			return next
+		}
+		return func(e wakeword.Event) {
+			log.Printf("[%s] WAKE 🔔 detected (frame %d) → listening", streamID, e.Frame)
+			next(e)
+		}
 	}
 
 	srv := server.New()
 	if *wwModel == "" {
 		srv.NewSink = func(streamID string) server.Sink {
 			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnVad, makeOnUtterance(streamID))
-			return vad.NewSink(streamID, engine, cfg, m.OnVad, m.OnFrame)
+			return vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
@@ -74,7 +112,8 @@ func main() {
 		defer wwEngine.Close()
 		srv.NewSink = func(streamID string) server.Sink {
 			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnWake, makeOnUtterance(streamID))
-			return wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg, m.OnVad, m.OnWake, m.OnFrame)
+			return wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
+				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word: %s)", *addr, *vadModel, *wwModel)
 	}

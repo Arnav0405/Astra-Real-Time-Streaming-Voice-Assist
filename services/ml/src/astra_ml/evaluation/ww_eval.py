@@ -16,6 +16,7 @@ from astra_ml.training.train_ww import (
     ACAV_VAL_ROWS,
     INT16_SCALE,
     SCORE_STEPS_PER_HOUR,
+    _read_recordings,
     load_head,
 )
 from astra_ml.training.ww_config import WwConfig, load_ww_config
@@ -177,7 +178,40 @@ def collect_streams(cfg: WwConfig, frontend: WwFrontend, head) -> dict:
     fa_streams = []
     for wav in scan_wavs_in_folds(cfg.eval.fa_audio_dirs, cfg.eval.fa_folds):
         fa_streams.append(stream_scores(frontend, head, load_mono(wav)))
-    return {"recall": streams, "word_end": word_end, "fa": fa_streams}
+    fa_speech_streams = [
+        stream_scores(frontend, head, load_mono(wav)) for wav in speech_fa_wavs(cfg)
+    ]
+    return {
+        "recall": streams,
+        "word_end": word_end,
+        "fa": fa_streams,
+        "fa_speech": fa_speech_streams,
+    }
+
+
+def speech_fa_wavs(cfg: WwConfig) -> list[Path]:
+    """Speech the model must stay silent through: manifest CSVs + held-out negative sessions.
+
+    fa_audio_dirs cannot carry these. ESC-50 has no speech category and the chime
+    speech chunks live interleaved with non-speech ones in a single directory, listed
+    only by CSV — an rglob over that directory would sweep in the non-speech chunks
+    that fa_audio_dirs already covers.
+    """
+    wavs: list[Path] = []
+    for manifest in cfg.eval.fa_speech_manifests:
+        if not manifest.exists():
+            print(f"warning: fa_speech_manifest missing, skipped: {manifest}")
+            continue
+        with open(manifest) as f:
+            for row in csv.reader(f):
+                if len(row) >= 2 and Path(row[1]).exists():
+                    wavs.append(Path(row[1]))
+    # eval + test: every negative session training did not see. Both are held out, and
+    # a speech FA number wants all the held-out audio it can get.
+    root = cfg.data.negative_recordings_root
+    for split in ("eval", "test"):
+        wavs += _read_recordings(root, split)
+    return wavs
 
 
 def build_report(collected: dict, pp_cfg: WwPostprocConfig, cfg: WwConfig) -> dict:
@@ -198,6 +232,9 @@ def build_report(collected: dict, pp_cfg: WwPostprocConfig, cfg: WwConfig) -> di
     report["lead_in_false_accepts"] = silence_fa
     report["fa_per_hour"] = fa_per_hour(collected["fa"], pp_cfg)
     report["fa_hours"] = sum(len(s) * CHUNK for s in collected["fa"]) / SR / 3600
+    speech = collected.get("fa_speech") or []
+    report["fa_per_hour_speech"] = fa_per_hour(speech, pp_cfg) if speech else None
+    report["fa_hours_speech"] = sum(len(s) * CHUNK for s in speech) / SR / 3600
     report["latency_ms_median"] = float(np.median(latencies)) if latencies else None
     report["latency_ms_p95"] = float(np.percentile(latencies, 95)) if latencies else None
 
@@ -208,6 +245,11 @@ def build_report(collected: dict, pp_cfg: WwPostprocConfig, cfg: WwConfig) -> di
         "recall_noisy": report["recall_noisy"] is not None
         and report["recall_noisy"] >= e.recall_floor_noisy,
         "fa_per_hour": report["fa_per_hour"] <= e.max_fa_per_hour,
+        # Fails when there is no speech FA set at all, unlike the permissive latency gate.
+        # An absent measurement is what let a model that fires on any spoken word pass:
+        # fa_audio_dirs is environmental audio, so "silent through speech" went unchecked.
+        "fa_per_hour_speech": report["fa_per_hour_speech"] is not None
+        and report["fa_per_hour_speech"] <= e.max_fa_per_hour_speech,
         "latency": report["latency_ms_median"] is None
         or report["latency_ms_median"] <= e.max_latency_ms,
     }

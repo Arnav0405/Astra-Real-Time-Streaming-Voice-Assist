@@ -12,6 +12,7 @@ from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
 from astra_ml.models.ww import EMB_DIM, HEAD_FRAMES
 from astra_ml.training.train_ww import (
     FeaturePools,
+    _slide_features,
     clip_features,
     load_head,
     place_clip,
@@ -80,6 +81,61 @@ def _write_recordings(cfg):
         writer.writerow(["session_a/000.wav", "a", "user", "", "train"])
 
 
+def _write_negative_recordings(cfg, seconds=3.0):
+    root = cfg.data.negative_recordings_root
+    (root / "session_neg_a").mkdir(parents=True)
+    sf.write(
+        root / "session_neg_a" / "000.wav",
+        np.random.default_rng(2).normal(0, 0.1, int(SR * seconds)).astype(np.float32),
+        SR,
+    )
+    with open(root / "manifest_split.csv", "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["path", "session", "speaker", "env", "split"])
+        writer.writerow(["session_neg_a/000.wav", "neg_a", "user", "", "train"])
+        # an eval-split row must stay out of the training pool: it is the speech FA set
+        writer.writerow(["session_neg_a/000.wav", "neg_a", "user", "", "eval"])
+
+
+def test_slide_features_covers_every_hop():
+    fe = WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND)
+    ws = fe.cfg.window_samples
+    hop = int(0.08 * SR)
+    clip = np.zeros(ws + 5 * hop, dtype=np.float32)
+    # every 80 ms offset the runtime can score, not just the 3 positive jitters
+    assert len(_slide_features(fe, clip)) == 6
+
+
+def test_slide_features_pads_a_short_clip_to_one_window():
+    fe = WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND)
+    feats = _slide_features(fe, np.zeros(SR // 4, dtype=np.float32))
+    assert len(feats) == 1
+    assert feats[0].shape == (HEAD_FRAMES, EMB_DIM)
+
+
+def test_precompute_caches_personal_negatives(ww_cfg):
+    _write_tts_tree(ww_cfg)
+    _write_recordings(ww_cfg)
+    _write_negative_recordings(ww_cfg)
+    fe = WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND)
+    cache = precompute(ww_cfg, frontend=fe)
+
+    user_neg = np.load(cache / "negatives_user.npy")
+    # 1 train clip * 2 augment rounds, slid; speed augmentation makes the exact window
+    # count vary, so pin the shape and that both rounds landed rather than a magic number
+    assert user_neg.shape[1:] == (HEAD_FRAMES, EMB_DIM)
+    assert user_neg.dtype == np.float16
+    assert len(user_neg) >= 2 * ww_cfg.augment.augment_rounds_user_negative
+
+
+def test_precompute_without_personal_negatives_caches_an_empty_pool(ww_cfg):
+    _write_tts_tree(ww_cfg)
+    _write_recordings(ww_cfg)
+    fe = WwFrontend(fake_melspec, fake_embed, DEFAULT_FRONTEND)
+    cache = precompute(ww_cfg, frontend=fe)
+    assert np.load(cache / "negatives_user.npy").shape == (0, HEAD_FRAMES, EMB_DIM)
+
+
 def test_precompute_shapes(ww_cfg):
     _write_tts_tree(ww_cfg)
     _write_recordings(ww_cfg)
@@ -97,7 +153,7 @@ def test_precompute_shapes(ww_cfg):
     assert np.load(cache / "negatives_local.npy").shape == (0, HEAD_FRAMES, EMB_DIM)
 
 
-def _write_feature_cache(cfg, n_pos=8, n_val=4, n_adv=8, n_user=8):
+def _write_feature_cache(cfg, n_pos=8, n_val=4, n_adv=8, n_user=8, n_user_neg=0):
     cache = cfg.training.features_cache
     cache.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(0)
@@ -108,6 +164,32 @@ def _write_feature_cache(cfg, n_pos=8, n_val=4, n_adv=8, n_user=8):
     np.save(cache / "positives_val.npy", rng.normal(1, 0.1, (n_val, *shape)).astype(np.float16))
     np.save(cache / "negatives_adv.npy", rng.normal(0, 0.1, (n_adv, *shape)).astype(np.float16))
     np.save(cache / "negatives_local.npy", np.zeros((0, *shape), dtype=np.float16))
+    # 7.0 for the same reason 5.0 marks user positives
+    np.save(cache / "negatives_user.npy", np.full((n_user_neg, *shape), 7.0, dtype=np.float16))
+
+
+# No ACAV file in the fixture, so its share of every batch is drawn from a zero-length
+# pool and the negative half comes up short of n_neg. These assert shares, not totals.
+def test_personal_negatives_get_a_quarter_of_the_negative_batch(ww_cfg):
+    _write_feature_cache(ww_cfg, n_user_neg=200)
+    pools = FeaturePools(ww_cfg, seed=0)
+    feats, labels = pools.batch(400)
+    neg = feats[labels < 0.5]
+    from_user = (neg.reshape(len(neg), -1)[:, 0] == 7.0).sum().item()
+    n_neg = 400 - 400 // 4
+    # equal share with adv and local: the only pool covering the deployment channel
+    assert from_user == n_neg // 4
+    assert len(neg) - from_user == n_neg // 4  # the adv share, local/acav pools being empty
+
+
+def test_missing_personal_negatives_does_not_starve_the_batch(ww_cfg):
+    _write_feature_cache(ww_cfg, n_user_neg=0)
+    pools = FeaturePools(ww_cfg, seed=0)
+    feats, labels = pools.batch(400)
+    neg = feats[labels < 0.5]
+    assert len(neg) == (400 - 400 // 4) // 4  # adv only, exactly as before this pool existed
+    assert (neg.reshape(len(neg), -1)[:, 0] == 7.0).sum().item() == 0
+    assert labels.sum() == 400 // 4  # positives unaffected
 
 
 def test_feature_pools_batch_composition(ww_cfg):

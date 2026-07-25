@@ -13,6 +13,12 @@ float16 feature windows ([N, 16, 96]) in training.features_cache:
 - positives_val.npy   TTS val positives, unaugmented
 - negatives_adv.npy   adversarial TTS phrases
 - negatives_local.npy windows slid over local negative audio dirs (optional)
+- negatives_user.npy  windows slid over the personal hard-negative recordings —
+                      the deployment speaker/mic/room saying anything but the
+                      wake word. Nothing else in the negative pool covers that
+                      channel, so without it the loss is satisfiable by a
+                      speaker/room detector that fires on every word the user
+                      says. Also the pool checkpoint selection scores against.
 
 train mixes those with the ~16 GB memory-mapped ACAV negative features
 (data.acav_features; its tail is held out for validation) under a weighted BCE
@@ -90,34 +96,45 @@ def _read_tts_manifest(cfg: WwConfig) -> dict[str, list[Path]]:
     return groups
 
 
-def _read_recordings(cfg: WwConfig) -> list[Path]:
-    split_manifest = cfg.data.recordings_root / "manifest_split.csv"
+def _read_recordings(root: Path, split: str = "train") -> list[Path]:
+    split_manifest = root / "manifest_split.csv"
     if not split_manifest.exists():
         return []
     with open(split_manifest) as f:
-        return [
-            cfg.data.recordings_root / row["path"]
-            for row in csv.DictReader(f)
-            if row["split"] == "train"
-        ]
+        return [root / row["path"] for row in csv.DictReader(f) if row["split"] == split]
+
+
+def _slide_features(frontend: WwFrontend, clip: np.ndarray) -> list[np.ndarray]:
+    """Feature windows at every LOCAL_NEG_HOP_S offset across a clip.
+
+    Negatives are slid, not jittered like positives: the runtime scores every
+    80 ms offset, and an alignment the model never saw as a negative is an
+    alignment it will happily fire on (the same reasoning as LOCAL_NEG_HOP_S).
+    Clips shorter than one window are zero-padded to a single window.
+    """
+    ws = frontend.cfg.window_samples
+    if len(clip) < ws:
+        return [frontend.features(place_clip(clip, 0, ws) * INT16_SCALE)]
+    hop = int(LOCAL_NEG_HOP_S * 16000)
+    return [
+        frontend.features(clip[start : start + ws] * INT16_SCALE)
+        for start in range(0, len(clip) - ws + 1, hop)
+    ]
+
+
+def _stack_features(frontend: WwFrontend, feats: list[np.ndarray]) -> np.ndarray:
+    if not feats:
+        return np.zeros((0, frontend.cfg.head_frames, frontend.cfg.emb_dim), dtype=np.float16)
+    return np.stack(feats).astype(np.float16)
 
 
 def _local_negative_windows(
     frontend: WwFrontend, dirs: list[Path], folds: list[int] | None = None
 ) -> np.ndarray:
-    ws = frontend.cfg.window_samples
-    hop = int(LOCAL_NEG_HOP_S * 16000)
     feats = []
     for wav in scan_wavs_in_folds(dirs, folds or []):
-        audio = load_mono(wav)
-        for start in range(0, max(1, len(audio) - ws + 1), hop):
-            chunk = audio[start : start + ws]
-            if len(chunk) < ws:
-                break
-            feats.append(frontend.features(chunk * INT16_SCALE))
-    if not feats:
-        return np.zeros((0, frontend.cfg.head_frames, frontend.cfg.emb_dim), dtype=np.float16)
-    return np.stack(feats).astype(np.float16)
+        feats += _slide_features(frontend, load_mono(wav))
+    return _stack_features(frontend, feats)
 
 
 def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
@@ -143,11 +160,27 @@ def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
     # kept in its own array, not concatenated into positives: merging them makes the TTS:user
     # ratio a property of the cache (20:1 here) instead of something training can control.
     user_positives = []
-    for path in _read_recordings(cfg):
+    for path in _read_recordings(cfg.data.recordings_root):
         clip = load_mono(path)
         for _ in range(cfg.augment.augment_rounds_user):
             variant = augment_user_clip(clip, rng, cfg.augment, noise_paths, rir_paths)
             user_positives.append(clip_features(frontend, variant))
+
+    # Same speaker/mic/room as user_positives, saying anything but the wake word. Slid
+    # rather than jittered, and with fewer augment rounds because sliding already yields
+    # ~12 windows per 3 s clip where clip_features yields 3.
+    user_negatives = []
+    for path in _read_recordings(cfg.data.negative_recordings_root):
+        clip = load_mono(path)
+        for _ in range(cfg.augment.augment_rounds_user_negative):
+            variant = augment_user_clip(clip, rng, cfg.augment, noise_paths, rir_paths)
+            user_negatives += _slide_features(frontend, variant)
+    if not user_negatives:
+        print(
+            "warning: no personal hard negatives — nothing in the negative pool covers the "
+            "deployment channel, expect false accepts on ordinary speech "
+            "(see astra_ml.data.ww_record --negative)"
+        )
 
     cache = cfg.training.features_cache
     cache.mkdir(parents=True, exist_ok=True)
@@ -159,6 +192,7 @@ def precompute(cfg: WwConfig, frontend: WwFrontend | None = None) -> Path:
         "positives_user": (
             np.concatenate(user_positives).astype(np.float16) if user_positives else empty
         ),
+        "negatives_user": _stack_features(frontend, user_negatives),
         "positives_val": np.concatenate(tts_feats(groups["val"], augment=False)).astype(np.float16),
         "negatives_adv": np.concatenate(tts_feats(groups["adversarial"], augment=True)).astype(
             np.float16
@@ -195,6 +229,18 @@ class FeaturePools:
         perm = self.rng.permutation(len(adv))
         n_adv_val = len(adv) // 10
         self.adv, self.adv_val = adv[perm[n_adv_val:]], adv[perm[:n_adv_val]]
+        # Personal hard negatives. Only the "train" sessions reach here (the split is by
+        # session in data.ww_recordings), so the val slice below is a within-session
+        # holdout for the selection quantile — the across-session honesty check is
+        # ww_eval's fa_per_hour_speech over the eval/test sessions.
+        user_neg_path = cache / "negatives_user.npy"
+        user_neg = np.load(user_neg_path) if user_neg_path.exists() else self.pos[:0]
+        if not len(user_neg):
+            print("warning: no personal hard negatives in cache — see precompute's warning")
+        perm = self.rng.permutation(len(user_neg))
+        n_un_val = len(user_neg) // 10
+        self.user_neg = user_neg[perm[n_un_val:]]
+        self.user_neg_val = user_neg[perm[:n_un_val]]
         self.local = np.load(cache / "negatives_local.npy")
         local_val_path = cache / "negatives_local_val.npy"
         self.local_val = np.load(local_val_path) if local_val_path.exists() else self.pos[:0]
@@ -221,13 +267,17 @@ class FeaturePools:
         n_tts = n_pos - n_user
         n_adv = n_neg // 4
         n_local = min(len(self.local), n_neg // 4)
-        n_acav = n_neg - n_adv - n_local
+        # An equal share with adv/local: it is a small pool, but it is the only one drawn
+        # from the channel the model is deployed into, so it must be seen as often.
+        n_user_neg = min(len(self.user_neg), n_neg // 4)
+        n_acav = n_neg - n_adv - n_local - n_user_neg
         feats = np.concatenate(
             [
                 self._draw(self.pos, n_tts),
                 self._draw(self.user, n_user),
                 self._draw(self.adv, n_adv),
                 self._draw(self.local, n_local),
+                self._draw(self.user_neg, n_user_neg),
                 self._draw(self.acav, n_acav),
             ]
         ).astype(np.float32)
@@ -254,13 +304,21 @@ def train(cfg: WwConfig) -> Path:
     val_pos = torch.from_numpy(np.load(t.features_cache / "positives_val.npy").astype(np.float32))
     val_neg = torch.from_numpy(
         np.concatenate(
-            [np.asarray(pools.acav_val), pools.adv_val, pools.local_val]
+            [np.asarray(pools.acav_val), pools.adv_val, pools.local_val, pools.user_neg_val]
         ).astype(np.float32)
     )
-    val_neg_fa = torch.from_numpy(np.asarray(pools.local_val).astype(np.float32))
+    # Checkpoint selection scores recall at a fixed FPR on this pool, so what goes in it
+    # is what training actually optimizes. The personal negatives belong here above all:
+    # selecting against environmental audio alone is how a channel detector wins.
+    val_neg_fa = torch.from_numpy(
+        np.concatenate([np.asarray(pools.local_val), pools.user_neg_val]).astype(np.float32)
+    )
     pp_threshold = cfg.postproc.threshold
     print(f"select fpr {SELECT_FPR:.0e}, val_neg {len(val_neg)}")
-    print(f"fa-domain val pool: {len(val_neg_fa)} windows @ threshold {pp_threshold}")
+    print(
+        f"fa-domain val pool: {len(val_neg_fa)} windows @ threshold {pp_threshold} "
+        f"({len(pools.user_neg_val)} personal)"
+    )
 
     model = WwHead(t.layer_size).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=t.lr)

@@ -6,9 +6,29 @@ data:
   spellings: [astraa, astra, astrah]
   n_positives: 30000
   n_positives_val: 2000
+  # Two roles in one list. The first block is the phonetic neighbourhood of "astraa"
+  # (/æ/-/ɑ/ onsets, str-/st- clusters, -ra endings); the rest is ordinary connected
+  # speech, which is what the mic actually hears and what ESC-50 and the chime
+  # backgrounds contain none of. 10 phrases covered 10 points in a very large space.
   adversarial_phrases:
-    [astro, extra, astronaut, master, ad astra, a strong, nasa, castra, australia, asthma]
-  n_adversarial_per_phrase: 800
+    [astro, extra, astronaut, master, ad astra, a strong, nasa, castra, australia, asthma,
+     aster, alabaster, abstract, abstraction, astride, astonish, astringent, asterisk,
+     after, afterwards, ask, asking, answer, actually, apple, athlete, avocado, absolute,
+     hasta, pasta, faster, plaster, disaster, castor, cluster, blaster, canister, minister,
+     stress, strong, stronger, strap, straight, strange, stranger, start, started, starting,
+     star, stars, starter, startle, stark, stardust, strata, strategy, strawberry, street,
+     estimate, extract, extreme, external, exactly, escape, expand, instead, install,
+     opera, camera, zebra, cobra, orchestra, spectra, sierra, tundra, umbrella, extra large,
+     alexa, hey google, okay computer, hey siri, computer, assistant,
+     what time is it, turn the lights off, play something else, can you pass me that,
+     it is a bit cold in here, we should probably leave soon, that was a strange noise,
+     put the kettle on after this, I asked her about it yesterday, remind me to call back,
+     set a timer for ten minutes, no I meant the other one, read me the news, open the window,
+     add milk to the shopping list, send a message, how long does the train take,
+     one two three four five, six seven eight nine ten, yeah okay right sure, hello hello]
+  # Dropped from 800 with the list ~10x longer: total adversarial clips go 8k -> ~26k, and
+  # coverage of the space matters more than repetitions of one phrase.
+  n_adversarial_per_phrase: 250
   acav_features: datasets/oww_negatives/openwakeword_features_ACAV100M_2000_hrs_16bit.npy
   acav_subsample: 2000000
   negative_audio_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
@@ -16,6 +36,15 @@ data:
   negative_val_folds: [4]        # held out -> val/est_fa_per_hour
   recordings_root: datasets/ww_recordings
   frozen_test_sessions: [quiet_near_0719, far_noise_0719]  # never trained on or tuned against
+  # Personal hard negatives: same speaker/mic/room as recordings_root, saying anything BUT
+  # the wake word. Record with:
+  #   uv run python -m astra_ml.data.ww_record --negative --session neg_quiet_near_0725 \
+  #       --prompts prompts/ww_hard_negatives.txt
+  #   uv run python -m astra_ml.data.ww_recordings --negative
+  negative_recordings_root: datasets/ww_negative_recordings
+  # Fill once >=2 negative sessions exist, so the speech FA gate is measured across
+  # sessions rather than only on the within-session holdout.
+  frozen_negative_test_sessions: []
 
 augment:
   rir_dir: datasets/source/RIRS_NOISES
@@ -26,6 +55,7 @@ augment:
   user_pitch_semitones: [-2.5, 2.0]
   user_speed_range: [0.8, 1.1]
   augment_rounds_user: 30
+  augment_rounds_user_negative: 8  # negatives are slid (~12 windows/clip), positives jittered (3)
 
 training:
   batch_size: 1024
@@ -37,12 +67,16 @@ training:
   seed: 1234
   features_cache: datasets/ww_features
   runs_dir: runs/ww
-  user_positive_frac: 0.5  # was effectively 0.048 when TTS and user shared one pool
+  # Was 0.5, which put half of every batch's positive gradient on ~190 utterances from one
+  # speaker in a handful of rooms while nothing in the negative pool covered that channel —
+  # a speaker/room detector fits that loss as well as a word detector does. Safe to raise
+  # again only in proportion to how much negative_recordings_root grows.
+  user_positive_frac: 0.25
 
 postproc:
   threshold: 0.85
   patience_frames: 2
-  refractory_seconds: 100.0
+  refractory_seconds: 2.0  # seconds, NOT frames — exporter multiplies by 50
 
 gating:
   preroll_frames: 50
@@ -51,7 +85,15 @@ gating:
 eval:
   fa_audio_dirs: [datasets/chime_prepared/backgrounds, datasets/ESC-50-master/audio]
   fa_folds: [5]                  # never trained on; the honest FA number
+  # Speech FA, gated separately: fa_audio_dirs is environmental (ESC-50 has no speech
+  # category, chime backgrounds are ambient), so on its own it cannot see "fires on any
+  # word I say". CSV manifests of `id,path`, plus the held-out negative recording sessions
+  # automatically. Paths inside the CSV are resolved relative to the services/ml cwd.
+  fa_speech_manifests: [datasets/chime_prepared/eval_speech.csv]
   recall_floor_quiet: 0.95
   recall_floor_noisy: 0.80
-  max_fa_per_hour: 200
+  # Was 200, which 190.2 passed. One false accept every ~19 s is not a shippable wake word;
+  # these are the numbers a retrain has to actually clear.
+  max_fa_per_hour: 20
+  max_fa_per_hour_speech: 5
   max_latency_ms: 500
