@@ -20,9 +20,10 @@ Go Streaming Backend  ── all in-process, ONNX Runtime, no per-frame allocs
     ├─▶ ✅ Voice Activity     custom PyTorch model → ONNX, mel frontend baked in
     ├─▶ ✅ Wake Word ("Astraa") OpenWakeWord head, VAD-gated with preroll backfill
     ├─▶ ✅ Endpointing        state machine: arm → capture → grace → closed utterance
+    ├─▶ ✅ Whisper API        per-stream serial worker → hosted transcription → transcript seam
     │
     ▼
-🔜 Whisper API ──▶ 🔜 LLM API ──▶ 🔜 Client Response
+🔜 LLM API ──▶ 🔜 Client Response
 ```
 
 And it isn't hand-waved — every model boundary is **golden-tested for Python↔Go parity**, down to per-frame probabilities within `1e-4`.
@@ -33,7 +34,8 @@ And it isn't hand-waved — every model boundary is **golden-tested for Python�
 - **Custom VAD, trained from scratch** — 40-mel → 2×Conv1d → GRU(64) → sigmoid, one frame per step, exported to ONNX (opset 17) with the mel frontend baked into the graph (PCM in, prob out — no STFT op at runtime). Trained on LibriParty + CHiME-Home negatives with SNR augmentation. On held-out test: **AUC 0.982 · F1 0.958 · 96.4% segment recall · 11.6 false alarms/hour · p90 onset latency 320 ms**. Post-processing is a hysteresis + debounce machine, grid-searched over 480 configs under a ≥0.95-recall constraint.
 - **Custom wake word "Astraa"** — TTS + real-recording positives, ACAV/adversarial negatives, an OpenWakeWord head trained over frozen frontends, all merged into a single `ww_v1.onnx`. On the frozen real-recording test sessions it clears every gate: **recall 0.96 quiet / 0.90 noisy, ~0.9 estimated production false-accepts/hour, median latency 0 ms.** In Go it runs VAD-gated with a 1 s ring-buffer preroll backfill so the trigger never misses the onset.
 - **Utterance endpointing** — a per-stream state machine that arms on the wake word (or on speech onset in VAD-only mode), captures PCM, and closes the turn on VAD silence plus a short grace window. A mid-sentence pause shorter than grace doesn't cut the speaker off; a cough or false fire shorter than `min_utterance_frames` is dropped silently. All timing is frame-counted (20 ms/frame), no wall-clock.
-- **Manual test loop** — a real mic client (`clients/mic`) streams your voice to the server; a `-verbose` trace prints the VAD/wake/utterance boundaries as they fire, and `-endpoint-wav-dir` dumps one `.wav` per captured utterance for playback. See [clients/mic/README.md](clients/mic/README.md).
+- **Whisper transcription** — closed utterances post to a hosted Whisper API (NagaAI, OpenAI-compatible) as in-memory WAVs. A per-stream worker transcribes serially and in order without ever blocking the frame path; failures retry once then drop (the stream lives); stream close drains the queue so the last words still transcribe. The transcript feeds an `onTranscript` seam — logged today, Phase 7's LLM plugs in there. `-no-asr` runs the front-end offline.
+- **Manual test loop** — a real mic client (`clients/mic`) streams your voice to the server; a `-verbose` trace prints the VAD/wake/utterance boundaries as they fire, transcripts land in the server log, and `-endpoint-wav-dir` dumps one `.wav` per captured utterance for playback. See [clients/mic/README.md](clients/mic/README.md).
 
 ### The discipline behind it
 
@@ -45,9 +47,8 @@ And it isn't hand-waved — every model boundary is **golden-tested for Python�
 
 ## What's next
 
-The front-end is done; now it earns its keep by talking to a brain.
+The front-end is done and speech becomes text; now it earns its keep by talking to a brain.
 
-- **🔜 Phase 6 — Whisper integration.** Swap the WAV dumper for a real ASR consumer: closed utterances stream to transcription instead of disk.
 - **🔜 Phase 7 — LLM + response streaming.** Wire the transcript to an LLM API and stream the response back to the client.
 - **🔜 Phase 8 — End-to-end latency.** Measure and tune time-to-first-token across the whole chain — the number this project is ultimately judged by.
 - **🔜 Phase 9 — Packaging.** Docker, deployment, the boring-on-purpose infrastructure.

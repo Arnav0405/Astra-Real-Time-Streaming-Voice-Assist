@@ -8,3 +8,5 @@ require (
 )
 
 require github.com/yalue/onnxruntime_go v1.31.0
+
+require github.com/joho/godotenv v1.5.1 // indirect

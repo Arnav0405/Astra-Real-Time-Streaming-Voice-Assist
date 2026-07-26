@@ -1,7 +1,7 @@
 package endpoint
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"log"
@@ -36,16 +36,10 @@ func NewWavDumper(dir, streamID string) (func(Utterance), error) {
 	}, nil
 }
 
-// writeWav writes a canonical 44-byte-header PCM WAV. ponytail: no wav lib —
-// the header is 11 fixed fields, one os.Create.
-func writeWav(path string, pcm []byte) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	w := bufio.NewWriter(f)
+// WavBytes wraps raw 16 kHz mono s16le PCM in a canonical 44-byte-header WAV.
+// ponytail: no wav lib — the header is 11 fixed fields.
+func WavBytes(pcm []byte) []byte {
+	w := bytes.NewBuffer(make([]byte, 0, 44+len(pcm)))
 	dataLen := uint32(len(pcm))
 	byteRate := uint32(wavSampleRate * wavChannels * wavBitsPerSample / 8)
 	blockAlign := uint16(wavChannels * wavBitsPerSample / 8)
@@ -64,5 +58,9 @@ func writeWav(path string, pcm []byte) error {
 	w.WriteString("data")
 	binary.Write(w, binary.LittleEndian, dataLen)
 	w.Write(pcm)
-	return w.Flush()
+	return w.Bytes()
+}
+
+func writeWav(path string, pcm []byte) error {
+	return os.WriteFile(path, WavBytes(pcm), 0o644)
 }

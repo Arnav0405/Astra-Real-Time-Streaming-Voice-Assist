@@ -4,12 +4,29 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"os"
 
+	"github.com/joho/godotenv"
+
+	"github.com/arnav/astra/services/backend/internal/asr"
 	"github.com/arnav/astra/services/backend/internal/endpoint"
 	"github.com/arnav/astra/services/backend/internal/server"
 	"github.com/arnav/astra/services/backend/internal/vad"
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
+
+// drainSink lets the ASR worker finish queued/in-flight transcriptions after
+// the stream's frames are drained. Close runs in the background so socket
+// teardown never waits on a slow transcription HTTP call.
+type drainSink struct {
+	server.Sink
+	worker *asr.Worker
+}
+
+func (s drainSink) Run(frames <-chan server.Frame) {
+	s.Sink.Run(frames)
+	go s.worker.Close()
+}
 
 func main() {
 	addr := flag.String("addr", ":8080", "listen address")
@@ -20,6 +37,9 @@ func main() {
 	wwConfig := flag.String("ww-config", "../../assets/models/wakeword/ww_v1.json", "path to wake-word sidecar config")
 	endpointConfig := flag.String("endpoint-config", "../../assets/configs/endpoint.json", "path to endpoint (utterance) config")
 	endpointWavDir := flag.String("endpoint-wav-dir", "", "if set, dump each closed utterance here as WAV (debug/verification)")
+	asrConfig := flag.String("asr-config", "../../assets/configs/asr.json", "path to ASR (transcription) config")
+	noASR := flag.Bool("no-asr", false, "disable transcription (VAD/wake/endpointing only)")
+	envFile := flag.String("env-file", "../../.env", "path to .env file with NAGA_API_KEY (already-exported env wins)")
 	verbose := flag.Bool("verbose", false, "log the per-stream pipeline trace (VAD speech/silence, wake, utterance)")
 	flag.Parse()
 
@@ -41,22 +61,55 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// onUtterance for a stream: WAV dumper when -endpoint-wav-dir is set, else
-	// nil (the machine logs each utterance). Per-stream because the dumper owns
-	// its own filename counter. Under -verbose, wrap it so the utterance end is
-	// always logged even when a WAV dumper is active.
-	makeOnUtterance := func(streamID string) func(endpoint.Utterance) {
+	// ASR is mandatory unless explicitly disabled: a missing key must be a
+	// choice you typed (-no-asr), never a silent fallback.
+	var asrClient *asr.Client
+	if *noASR {
+		log.Print("asr disabled (-no-asr): utterances will not be transcribed")
+	} else {
+		godotenv.Load(*envFile) // best effort; exported env wins over the file
+		key := os.Getenv("NAGA_API_KEY")
+		if key == "" {
+			log.Fatalf("NAGA_API_KEY not set (checked environment and %s); pass -no-asr to run without transcription", *envFile)
+		}
+		acfg, err := asr.LoadConfig(*asrConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
+		asrClient = asr.NewClient(acfg, key)
+		log.Printf("asr enabled: %s model %s", acfg.BaseURL, acfg.Model)
+	}
+
+	// onUtterance for a stream: optional WAV dumper (-endpoint-wav-dir), then
+	// the ASR worker; with neither, nil (the machine logs each utterance).
+	// Per-stream because the dumper owns its filename counter and the worker
+	// its queue. Under -verbose, wrap it so the utterance end is always logged.
+	// The returned worker is nil when ASR is disabled.
+	makeOnUtterance := func(streamID string) (func(endpoint.Utterance), *asr.Worker) {
 		var next func(endpoint.Utterance)
+		var worker *asr.Worker
+		if asrClient != nil {
+			// nil onTranscript = server-side transcript log; Phase 7's LLM
+			// consumer plugs in here.
+			worker = asr.NewWorker(streamID, asrClient, nil)
+			next = func(u endpoint.Utterance) { worker.Enqueue(u) }
+		}
 		if *endpointWavDir != "" {
 			dump, err := endpoint.NewWavDumper(*endpointWavDir, streamID)
 			if err != nil {
 				log.Printf("stream %s: wav dumper disabled: %v", streamID, err)
 			} else {
-				next = dump
+				enqueue := next
+				next = func(u endpoint.Utterance) {
+					dump(u)
+					if enqueue != nil {
+						enqueue(u)
+					}
+				}
 			}
 		}
 		if !*verbose {
-			return next
+			return next, worker
 		}
 		return func(u endpoint.Utterance) {
 			log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
@@ -64,7 +117,16 @@ func main() {
 			if next != nil {
 				next(u)
 			}
+		}, worker
+	}
+
+	// withDrain wraps a sink so the stream's ASR worker drains after the
+	// frame channel closes (Q10: last words still transcribe).
+	withDrain := func(s server.Sink, w *asr.Worker) server.Sink {
+		if w == nil {
+			return s
 		}
+		return drainSink{Sink: s, worker: w}
 	}
 
 	// Under -verbose, tee the VAD/wake events to the log before the endpoint
@@ -96,8 +158,9 @@ func main() {
 	srv := server.New()
 	if *wwModel == "" {
 		srv.NewSink = func(streamID string) server.Sink {
-			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnVad, makeOnUtterance(streamID))
-			return vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame)
+			onUtt, worker := makeOnUtterance(streamID)
+			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnVad, onUtt)
+			return withDrain(vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame), worker)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
@@ -111,9 +174,10 @@ func main() {
 		}
 		defer wwEngine.Close()
 		srv.NewSink = func(streamID string) server.Sink {
-			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnWake, makeOnUtterance(streamID))
-			return wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
-				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame)
+			onUtt, worker := makeOnUtterance(streamID)
+			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnWake, onUtt)
+			return withDrain(wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
+				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame), worker)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word: %s)", *addr, *vadModel, *wwModel)
 	}
