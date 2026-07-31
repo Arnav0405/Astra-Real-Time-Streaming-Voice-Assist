@@ -40,5 +40,5 @@ services/ml/**/*.onnx
 .env.*
 
 # Claude Stuff
-CONTEXT.md
-docs/
+# CONTEXT.md
+# docs/
