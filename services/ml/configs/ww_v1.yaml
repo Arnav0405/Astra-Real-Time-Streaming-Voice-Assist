@@ -59,7 +59,7 @@ augment:
 
 training:
   batch_size: 1024
-  steps: 30000
+  steps: 45000
   lr: 1.5e-3
   layer_size: 256
   max_negative_weight: 500

@@ -2,20 +2,23 @@
   "postproc": {
     "threshold": 0.85,
     "patience_frames": 2,
-    "refractory_frames": 5000
+    "refractory_frames": 100
   },
   "recall_quiet": 0.96,
   "recall_noisy": 0.9,
   "recall_test": 0.72,
   "lead_in_false_accepts": 0,
-  "fa_per_hour": 190.21526418786692,
+  "fa_per_hour": 200.78277886497062,
   "fa_hours": 0.5677777777777778,
+  "fa_per_hour_speech": 345.1219512195122,
+  "fa_hours_speech": 0.82,
   "latency_ms_median": 0.0,
   "latency_ms_p95": 1300.0,
   "gates": {
     "recall_quiet": true,
     "recall_noisy": true,
-    "fa_per_hour": true,
+    "fa_per_hour": false,
+    "fa_per_hour_speech": false,
     "latency": true
   },
   "est_fa_per_hour_acav": 0.9
