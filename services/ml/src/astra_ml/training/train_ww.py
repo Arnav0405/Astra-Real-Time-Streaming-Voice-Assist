@@ -32,6 +32,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from sklearn.metrics import roc_auc_score
 from torch.utils.tensorboard import SummaryWriter
 
 from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
@@ -372,14 +373,36 @@ def train(cfg: WwConfig) -> Path:
                 score = (pos_scores > thresh).float().mean().item()
             else:
                 score = recall
+            # FAR/FRR/F1 at the deployment threshold (pp_threshold), on the same FA-domain
+            # pool est_fa uses — the pair the eval.max_fa_per_hour gate actually cares about.
+            far = fa_fp
+            recall_pp = (pos_scores >= pp_threshold).float().mean().item()
+            frr = 1.0 - recall_pp
+            tp = (pos_scores >= pp_threshold).float().sum().item()
+            fp_count = (fa_neg_scores >= pp_threshold).float().sum().item() if len(fa_neg_scores) else 0.0
+            precision = tp / (tp + fp_count) if (tp + fp_count) > 0 else 0.0
+            f1 = 2 * precision * recall_pp / (precision + recall_pp) if (precision + recall_pp) > 0 else 0.0
+            # AUC over the broad val_neg pool (same negatives fp_rate/recall pair against),
+            # not the FA-domain pool: it's a threshold-free separability check, not a gate number.
+            if len(neg_scores) and len(pos_scores):
+                auc_labels = np.concatenate([np.ones(len(pos_scores)), np.zeros(len(neg_scores))])
+                auc_scores = np.concatenate([pos_scores.numpy(), neg_scores.numpy()])
+                auc = roc_auc_score(auc_labels, auc_scores)
+            else:
+                auc = 0.0
             writer.add_scalar("val/recall", recall, step)
             writer.add_scalar("val/fp_rate", fp, step)
             writer.add_scalar("val/recall_at_select_fpr", score, step)
             # the only val number directly comparable to the eval.max_fa_per_hour gate
             writer.add_scalar("val/est_fa_per_hour", est_fa, step)
+            writer.add_scalar("val/far", far, step)
+            writer.add_scalar("val/frr", frr, step)
+            writer.add_scalar("val/f1", f1, step)
+            writer.add_scalar("val/auc", auc, step)
             print(
                 f"step {step}: loss {loss.item():.4f} recall {recall:.3f} "
-                f"fp {fp:.5f} (~{est_fa:.1f} fa/hr) recall@fpr {score:.3f}"
+                f"fp {fp:.5f} (~{est_fa:.1f} fa/hr) recall@fpr {score:.3f} "
+                f"far {far:.5f} frr {frr:.3f} f1 {f1:.3f} auc {auc:.3f}"
             )
             if score > best_score:
                 best_score = score
