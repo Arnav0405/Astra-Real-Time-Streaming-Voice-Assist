@@ -8,92 +8,31 @@ import argparse
 import json
 from pathlib import Path
 
-import numpy as np
-
 from astra_ml.audio.ww_frontend import DEFAULT_FRONTEND, WwFrontend
-from astra_ml.evaluation.ww_eval import (
+from astra_ml.evaluation.ww_eval import collect_streams
+from astra_ml.evaluation.ww_metrics import (
+    PATIENCES,
     SR,
-    collect_streams,
-    fa_per_hour,
-    LEAD_IN_FRAMES,
-    recall_and_latency,
+    THRESHOLDS,
+    pick_best,
+    score_grid,
+    tune_report,
+    update_sidecar,
 )
-from astra_ml.postproc_ww import WwPostprocConfig
 from astra_ml.training.train_ww import load_head
 from astra_ml.training.ww_config import load_ww_config
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
 DEFAULT_SIDECAR = REPO_ROOT / "assets" / "models" / "wakeword" / "ww_v1.json"
 
-THRESHOLDS = [round(x, 2) for x in np.arange(0.30, 0.96, 0.05)]
-PATIENCES = [1, 2, 3]
-
-
-def score_grid(collected: dict, refractory_frames: int) -> list[dict]:
-    results = []
-    for threshold in THRESHOLDS:
-        for patience in PATIENCES:
-            pp_cfg = WwPostprocConfig(threshold, patience, refractory_frames)
-            recall_q, lat_q, _ = recall_and_latency(
-                collected["recall"]["quiet"],
-                collected["word_end"]["quiet"],
-                pp_cfg,
-                min_frame=LEAD_IN_FRAMES,
-            )
-            recall_n, lat_n, _ = recall_and_latency(
-                collected["recall"]["noisy"],
-                collected["word_end"]["noisy"],
-                pp_cfg,
-                min_frame=LEAD_IN_FRAMES,
-            )
-            latencies = lat_q + lat_n
-            results.append(
-                {
-                    "threshold": threshold,
-                    "patience_frames": patience,
-                    "recall_quiet": recall_q,
-                    "recall_noisy": recall_n,
-                    "fa_per_hour": fa_per_hour(collected["fa"], pp_cfg),
-                    "fa_per_hour_speech": (
-                        fa_per_hour(collected["fa_speech"], pp_cfg)
-                        if collected.get("fa_speech")
-                        else None
-                    ),
-                    "latency_ms_median": float(np.median(latencies)) if latencies else None,
-                }
-            )
-    return results
-
-
-def _inf_if_none(value: float | None) -> float:
-    return float("inf") if value is None else value
-
-
-def pick_best(results: list[dict], floor_quiet: float, floor_noisy: float) -> dict:
-    ok = [
-        r for r in results if r["recall_quiet"] >= floor_quiet and r["recall_noisy"] >= floor_noisy
-    ]
-    if not ok:
-        # nothing meets the floors: maximize recall instead so the report is useful
-        return max(results, key=lambda r: r["recall_quiet"] + r["recall_noisy"])
-    # Speech FA leads: minimizing environmental FA alone is what picked a threshold that
-    # fires on any spoken word. With no speech set every key is inf and this degrades to
-    # the old environmental-FA ordering.
-    return min(
-        ok,
-        key=lambda r: (
-            _inf_if_none(r.get("fa_per_hour_speech")),
-            r["fa_per_hour"],
-            _inf_if_none(r["latency_ms_median"]),
-        ),
-    )
-
-
-def update_sidecar(sidecar_path: Path, best: dict) -> None:
-    sidecar = json.loads(sidecar_path.read_text())
-    sidecar["recommended_threshold"] = best["threshold"]
-    sidecar["postproc"]["patience_frames"] = best["patience_frames"]
-    sidecar_path.write_text(json.dumps(sidecar, indent=2) + "\n")
+# Re-exported so importers (and tests) keep the pre-split import surface.
+__all__ = [
+    "PATIENCES",
+    "THRESHOLDS",
+    "pick_best",
+    "score_grid",
+    "update_sidecar",
+]
 
 
 def main() -> None:
@@ -113,19 +52,7 @@ def main() -> None:
     results = score_grid(collected, refractory_frames)
     best = pick_best(results, cfg.eval.recall_floor_quiet, cfg.eval.recall_floor_noisy)
 
-    report = {
-        "best": {**best, "refractory_frames": refractory_frames},
-        "floors": {
-            "recall_quiet": cfg.eval.recall_floor_quiet,
-            "recall_noisy": cfg.eval.recall_floor_noisy,
-        },
-        "combos_scored": len(results),
-        # NOT a ranking — lowest-FA combos, which are the most conservative and worst-recall
-        # on the grid. The setting to ship is "best" above; this list is for seeing the curve.
-        "lowest_fa_combos_diagnostic_only": sorted(
-            results, key=lambda r: (_inf_if_none(r.get("fa_per_hour_speech")), r["fa_per_hour"])
-        )[:10],
-    }
+    report = tune_report(results, best, refractory_frames, cfg)
     out = cfg.training.runs_dir / "tune_report.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(report, indent=2) + "\n")

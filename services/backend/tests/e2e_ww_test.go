@@ -24,16 +24,47 @@ import (
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
 
+// wwVariants are graded independently: v1 (frozen OWW frontend + MLP head) and v2
+// (log-mel + BC-ResNet) ship side by side until v2 clears its eval gates. Each skips
+// until its artifacts and fixture exist, so an untrained v2 is not a failure.
+var wwVariants = []struct {
+	name    string
+	model   string
+	sidecar string
+	fixture string
+}{
+	{
+		"ww_v1",
+		"../../../assets/models/wakeword/ww_v1.onnx",
+		"../../../assets/models/wakeword/ww_v1.json",
+		"testdata/e2e_ww_golden.json",
+	},
+	{
+		"ww_v2",
+		"../../../assets/models/wakeword/ww_v2.onnx",
+		"../../../assets/models/wakeword/ww_v2.json",
+		"testdata/e2e_ww_golden_v2.json",
+	},
+}
+
 func TestEndToEndWakeWord(t *testing.T) {
-	data, err := os.ReadFile("testdata/e2e_ww_golden.json")
+	for _, v := range wwVariants {
+		t.Run(v.name, func(t *testing.T) {
+			runEndToEndWakeWord(t, v.name, v.model, v.sidecar, v.fixture)
+		})
+	}
+}
+
+func runEndToEndWakeWord(t *testing.T, name, modelPath, sidecarPath, fixture string) {
+	data, err := os.ReadFile(fixture)
 	if os.IsNotExist(err) {
-		t.Skip("e2e_ww_golden.json not generated yet (needs trained ww_v1 + recordings)")
+		t.Skipf("%s not generated yet (needs trained %s + recordings)", fixture, name)
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat("../../../assets/models/wakeword/ww_v1.onnx"); os.IsNotExist(err) {
-		t.Skip("ww_v1.onnx not committed yet")
+	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+		t.Skipf("%s.onnx not committed yet", name)
 	}
 	if err := vad.Init(""); err != nil {
 		t.Skipf("onnxruntime unavailable: %v", err)
@@ -61,11 +92,11 @@ func TestEndToEndWakeWord(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer vadEngine.Close()
-	wwCfg, err := wakeword.LoadConfig("../../../assets/models/wakeword/ww_v1.json")
+	wwCfg, err := wakeword.LoadConfig(sidecarPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wwEngine, err := wakeword.NewEngine("../../../assets/models/wakeword/ww_v1.onnx", wwCfg)
+	wwEngine, err := wakeword.NewEngine(modelPath, wwCfg)
 	if err != nil {
 		t.Fatal(err)
 	}

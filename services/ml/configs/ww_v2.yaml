@@ -1,0 +1,89 @@
+# Wake word v2: BC-ResNet-3 trained from scratch on log-mel, replacing the frozen
+# OpenWakeWord melspectrogram + Google speech-embedding + MLP head of ww_v1.
+#
+# Data GENERATION still runs off configs/ww_v1.yaml (ww_generate.py, ww_record.py,
+# ww_recordings.py). v2 reuses the clips those produced and only needs their paths.
+
+data:
+  tts_out: datasets/ww_tts                 # manifest.csv: positives + adversarials
+  recordings_root: datasets/ww_recordings
+  negative_recordings_root: datasets/ww_negative_recordings
+  frozen_test_sessions: [quiet_near_0719, far_noise_0719]
+  frozen_negative_test_sessions: []
+
+  # Environmental negatives, unchanged from v1 including the fold discipline.
+  negative_audio_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
+  negative_folds: [1, 2, 3]
+  negative_val_folds: [4]
+
+  # The v1 fix. ESC-50 has no speech category and the chime backgrounds are ambient, so
+  # v1's negative pool contained essentially no connected speech and the model had never
+  # been asked to reject a word. Speaker-disjoint by LibriSpeech's own subset split:
+  # train-clean-100 trains, dev-clean validates, test-clean is the frozen speech FA set
+  # under eval.fa_speech_dirs and is never trained on.
+  speech_negative_dirs: [datasets/source/LibriSpeech/train-clean-100]
+  speech_negative_val_dirs: [datasets/source/LibriSpeech/dev-clean]
+
+frontend:
+  window_samples: 15360    # 0.96 s = 12 x 1280; 94 mel frames
+  win_samples: 480         # 30 ms, per the paper
+  hop_samples: 160         # 10 ms
+  n_mels: 40
+  chunk_samples: 1280      # 80 ms scoring cadence, unchanged from v1
+
+model:
+  base_c: 24               # BC-ResNet-3 (base_c = 8 * tau), 54.2k params
+  sub_bands: 5
+
+augment:
+  rir_dir: datasets/source/RIRS_NOISES
+  rir_prob: 0.5
+  noise_prob: 0.8          # the paper's background-noise probability
+  # Wider than v1's [0.2, 5.0]: with LibriSpeech in the pool the window background is
+  # itself often speech, and pinning everything near 0 dB SNR buries the keyword.
+  snr_db_range: [0.2, 15.0]
+  noise_dirs: [datasets/ESC-50-master/audio, datasets/chime_prepared/backgrounds]
+  user_pitch_semitones: [-2.5, 2.0]
+  user_speed_range: [0.8, 1.1]
+  positive_jitter_ms: 200.0
+  partial_max_frac: 0.6
+  partial_negative_frac: 0.15
+  freq_mask_param: 5       # BC-ResNet-3 -> F=5
+  time_mask_param: 20
+  n_freq_masks: 2
+  n_time_masks: 2
+
+training:
+  runs_dir: runs/ww_v2
+  seed: 1234
+  batch_size: 100
+  steps: 75000
+  lr_peak: 0.1
+  warmup_steps: 1875
+  momentum: 0.9
+  weight_decay: 0.001
+  val_every: 500
+  val_batches: 40
+  num_workers: 4
+  positive_frac: 0.25
+  user_positive_frac: 0.25
+
+postproc:
+  threshold: 0.85          # placeholder; tune_ww.py --update-sidecar overwrites at export
+  patience_frames: 2
+  refractory_seconds: 2.0
+
+gating:
+  preroll_frames: 50
+  partial_chunk: drop
+
+eval:
+  fa_audio_dirs: [datasets/chime_prepared/backgrounds, datasets/ESC-50-master/audio]
+  fa_folds: [5]
+  fa_speech_manifests: [datasets/chime_prepared/eval_speech.csv]
+  fa_speech_dirs: [datasets/source/LibriSpeech/test-clean]
+  recall_floor_quiet: 0.95
+  recall_floor_noisy: 0.80
+  max_fa_per_hour: 20
+  max_fa_per_hour_speech: 5
+  max_latency_ms: 500

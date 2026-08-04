@@ -11,6 +11,11 @@ Writes into services/backend/internal/wakeword/testdata/:
                             (needs the committed assets/models/wakeword
                             artifacts; skipped when absent)
 
+The first two fixtures are model-free and shared by every model version. Only the
+inference and e2e fixtures are tied to a specific graph, so --name selects which one:
+ww_v1 writes the unsuffixed files, anything else appends its own suffix
+(ww_v2 -> ww_inference_golden_v2.json), letting both models be graded side by side.
+
 GatingSim below IS the reference semantics for wakeword.Sink:
 
 - per incoming 20 ms frame: buffer it; deliver any scripted VAD event for this
@@ -173,11 +178,16 @@ def gen_gating() -> None:
 # ---------------------------------------------------------------- inference
 
 
-def gen_inference() -> None:
-    model_path = MODEL_DIR / "ww_v1.onnx"
-    sidecar_path = MODEL_DIR / "ww_v1.json"
+def _suffix(name: str) -> str:
+    """ww_v1 keeps the original filenames; later versions get their own."""
+    return "" if name == "ww_v1" else name.removeprefix("ww")
+
+
+def gen_inference(name: str = "ww_v1") -> None:
+    model_path = MODEL_DIR / f"{name}.onnx"
+    sidecar_path = MODEL_DIR / f"{name}.json"
     if not model_path.exists() or not sidecar_path.exists():
-        print("ww_inference_golden: skipped (no committed ww_v1 artifacts yet)")
+        print(f"ww_inference_golden{_suffix(name)}: skipped (no committed {name} artifacts yet)")
         return
     import onnxruntime as ort
 
@@ -205,17 +215,17 @@ def gen_inference() -> None:
         "pcm_s16le_base64": base64.b64encode(pcm.tobytes()).decode(),
         "scores": scores,
     }
-    _write("ww_inference_golden.json", out)
+    _write(f"ww_inference_golden{_suffix(name)}.json", out)
 
 
-def gen_e2e() -> None:
+def gen_e2e(name: str = "ww_v1") -> None:
     """Full-stack fixture: a real recorded "Astraa" clip + the vad and wake
     events the runtime must produce. Needs the committed vad + ww artifacts and
     a recordings manifest; skipped until they exist."""
     import csv
 
-    ww_model = MODEL_DIR / "ww_v1.onnx"
-    ww_sidecar_path = MODEL_DIR / "ww_v1.json"
+    ww_model = MODEL_DIR / f"{name}.onnx"
+    ww_sidecar_path = MODEL_DIR / f"{name}.json"
     vad_model = REPO_ROOT / "assets" / "models" / "vad" / "vad_v1.onnx"
     vad_sidecar_path = REPO_ROOT / "assets" / "models" / "vad" / "vad_v1.json"
     recordings = Path("datasets/ww_recordings")
@@ -291,7 +301,7 @@ def gen_e2e() -> None:
     }
     e2e_dir = REPO_ROOT / "services" / "backend" / "tests" / "testdata"
     e2e_dir.mkdir(parents=True, exist_ok=True)
-    path = e2e_dir / "e2e_ww_golden.json"
+    path = e2e_dir / f"e2e_ww_golden{_suffix(name)}.json"
     path.write_text(json.dumps(out, indent=2) + "\n")
     print(f"wrote {path} (wakes: {sim.wakes})")
 
@@ -304,10 +314,17 @@ def _write(name: str, obj: dict) -> None:
 
 
 def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--name", default="ww_v1", help="model basename in assets/models/wakeword")
+    args = parser.parse_args()
+
+    # Model-free, so generated once regardless of --name.
     gen_postproc()
     gen_gating()
-    gen_inference()
-    gen_e2e()
+    gen_inference(args.name)
+    gen_e2e(args.name)
 
 
 if __name__ == "__main__":
