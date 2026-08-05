@@ -51,10 +51,41 @@ def load_manifest(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def scan_negative_manifest(root: Path) -> list[dict]:
+    """Rebuild manifest.csv rows from session_*/*.wav on disk, for negatives that landed
+    in the folder without going through ww_record.py's --negative flow (e.g. copied in
+    directly on a training machine)."""
+    rows = []
+    for session_dir in sorted(root.glob("session_*")):
+        session = session_dir.name.removeprefix("session_")
+        for wav in sorted(session_dir.glob("*.wav")):
+            rows.append(
+                {
+                    "path": wav.relative_to(root).as_posix(),
+                    "session": session,
+                    "speaker": "user",
+                    "env": "",
+                }
+            )
+    return rows
+
+
+def write_negative_manifest(root: Path) -> Path:
+    rows = scan_negative_manifest(root)
+    out = root / "manifest.csv"
+    with open(out, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["path", "session", "speaker", "env"])
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"{out}: {len(rows)} clips from {root}/session_*")
+    return out
+
+
 def write_split_manifest(config_path: Path, negative: bool = False) -> Path:
     cfg = load_ww_config(config_path)
     if negative:
         root, frozen = cfg.data.negative_recordings_root, cfg.data.frozen_negative_test_sessions
+        write_negative_manifest(root)
     else:
         root, frozen = cfg.data.recordings_root, cfg.data.frozen_test_sessions
     rows = assign_splits(load_manifest(root / "manifest.csv"), frozen)

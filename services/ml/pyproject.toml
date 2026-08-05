@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml>=6.0",
     "openwakeword",
     "piper-sample-generator==3.2.0",
+    "sounddevice>=0.5.5",
 ]
 
 [build-system]
