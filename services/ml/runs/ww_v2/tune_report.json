@@ -1,0 +1,109 @@
+{
+  "best": {
+    "threshold": 0.5,
+    "patience_frames": 2,
+    "recall_quiet": 0.96,
+    "recall_noisy": 0.9,
+    "fa_per_hour": 17.612524461839527,
+    "fa_per_hour_speech": 13.2381556608622,
+    "latency_ms_median": 0.0,
+    "refractory_frames": 100
+  },
+  "floors": {
+    "recall_quiet": 0.95,
+    "recall_noisy": 0.8
+  },
+  "combos_scored": 42,
+  "lowest_fa_combos_diagnostic_only": [
+    {
+      "threshold": 0.95,
+      "patience_frames": 3,
+      "recall_quiet": 0.58,
+      "recall_noisy": 0.48,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 0.0,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.95,
+      "patience_frames": 1,
+      "recall_quiet": 0.64,
+      "recall_noisy": 0.52,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 0.15949585133568916,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.95,
+      "patience_frames": 2,
+      "recall_quiet": 0.6,
+      "recall_noisy": 0.48,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 0.15949585133568916,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.9,
+      "patience_frames": 3,
+      "recall_quiet": 0.7,
+      "recall_noisy": 0.58,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 0.6379834053427567,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.9,
+      "patience_frames": 2,
+      "recall_quiet": 0.72,
+      "recall_noisy": 0.64,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 0.7974792566784458,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.85,
+      "patience_frames": 3,
+      "recall_quiet": 0.76,
+      "recall_noisy": 0.68,
+      "fa_per_hour": 1.761252446183953,
+      "fa_per_hour_speech": 0.9569751080141349,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.9,
+      "patience_frames": 1,
+      "recall_quiet": 0.72,
+      "recall_noisy": 0.66,
+      "fa_per_hour": 0.0,
+      "fa_per_hour_speech": 1.116470959349824,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.8,
+      "patience_frames": 3,
+      "recall_quiet": 0.8,
+      "recall_noisy": 0.74,
+      "fa_per_hour": 1.761252446183953,
+      "fa_per_hour_speech": 1.2759668106855133,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.85,
+      "patience_frames": 2,
+      "recall_quiet": 0.76,
+      "recall_noisy": 0.7,
+      "fa_per_hour": 1.761252446183953,
+      "fa_per_hour_speech": 1.2759668106855133,
+      "latency_ms_median": 0.0
+    },
+    {
+      "threshold": 0.8,
+      "patience_frames": 2,
+      "recall_quiet": 0.8,
+      "recall_noisy": 0.74,
+      "fa_per_hour": 1.761252446183953,
+      "fa_per_hour_speech": 1.4354626620212023,
+      "latency_ms_median": 0.0
+    }
+  ]
+}

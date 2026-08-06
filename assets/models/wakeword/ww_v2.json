@@ -1,0 +1,38 @@
+{
+  "sample_rate": 16000,
+  "graph": "merged",
+  "chunk_samples": 1280,
+  "window_samples": 15360,
+  "input_scale": "int16",
+  "mel": {
+    "bins": 40,
+    "hop_samples": 160,
+    "window_samples": 480,
+    "window_frames_total": 94
+  },
+  "model": {
+    "arch": "bcresnet",
+    "base_c": 24,
+    "sub_bands": 5
+  },
+  "io": {
+    "merged": {
+      "input": "audio",
+      "input_shape": [
+        1,
+        15360
+      ],
+      "output": "prob"
+    }
+  },
+  "recommended_threshold": 0.5,
+  "postproc": {
+    "patience_frames": 2,
+    "refractory_frames": 100
+  },
+  "gating": {
+    "preroll_frames": 50,
+    "partial_chunk": "drop"
+  },
+  "opset": 17
+}
