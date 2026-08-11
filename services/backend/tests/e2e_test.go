@@ -59,7 +59,7 @@ func TestEndToEndVad(t *testing.T) {
 	var events []vad.Event
 	var sink server.Sink
 	srv := server.New()
-	srv.NewSink = func(streamID string) server.Sink {
+	srv.NewSink = func(streamID string, _ server.Sender) server.Sink {
 		sink = vad.NewSink(streamID, engine, cfg, func(e vad.Event) {
 			mu.Lock()
 			events = append(events, e)

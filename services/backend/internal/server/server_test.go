@@ -34,7 +34,7 @@ func (c *captureSink) Err() error             { return nil }
 func dial(t *testing.T) (*websocket.Conn, *captureSink) {
 	t.Helper()
 	sink := &captureSink{done: make(chan struct{})}
-	srv := &Server{NewSink: func(string) Sink { return sink }}
+	srv := &Server{NewSink: func(string, Sender) Sink { return sink }}
 	ts := httptest.NewServer(srv)
 	t.Cleanup(ts.Close)
 

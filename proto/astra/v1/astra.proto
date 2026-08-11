@@ -33,11 +33,19 @@ message AudioFrame {
 
 message StreamStop {}
 
-// Server -> client envelope.
+// Server -> client envelope. StreamStarted is sent once; the reply messages
+// stream per turn. Every reply message carries the utterance_id it belongs to
+// (the utterance's first frame seq) so a client can discard audio from a turn
+// it has already cancelled.
 message ServerMessage {
   oneof msg {
     StreamStarted stream_started = 1;
     Error error = 2;
+    Transcript transcript = 3;
+    ReplyDelta reply_delta = 4;
+    ReplyAudio reply_audio = 5;
+    ReplyEnd reply_end = 6;
+    Cancel cancel = 7;
   }
 }
 
@@ -49,4 +57,51 @@ message StreamStarted {
 message Error {
   string code = 1;
   string message = 2;
+}
+
+// What the user said, once the utterance closed and ASR returned.
+message Transcript {
+  uint64 utterance_id = 1; // seq of the utterance's first frame
+  string text = 2;
+}
+
+// One chunk of the assistant's reply text, as the LLM streams it. Display
+// only — the audio path is independent and may lag behind.
+message ReplyDelta {
+  uint64 utterance_id = 1;
+  string text = 2;
+}
+
+// One chunk of synthesized reply audio: mono s16le. seq starts at 0 per turn.
+//
+// Unlike the inbound AudioFrame this is NOT pinned to 16 kHz. The server only
+// forwards reply audio — nothing server-side analyses it — so pinning the rate
+// would mean writing a resampler purely to satisfy a constant. The TTS
+// provider's rate is carried here instead and the client resamples on
+// playback, which the Web Audio API does natively.
+message ReplyAudio {
+  uint64 utterance_id = 1;
+  uint64 seq = 2;
+  bytes pcm = 3;
+  uint32 sample_rate_hz = 4;
+}
+
+// Discard any buffered audio for this turn NOW. Sent on barge-in, ahead of
+// ReplyEnd: stopping the server from sending is not the same as stopping the
+// client from playing what it already holds, and the client-side flush is what
+// the user actually perceives as the interruption.
+message Cancel {
+  uint64 utterance_id = 1;
+}
+
+// Terminates a turn. Exactly one per turn that produced any reply.
+message ReplyEnd {
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    DONE = 1;       // the reply finished on its own
+    BARGED_IN = 2;  // the user talked over it; a Cancel preceded this
+    ERROR = 3;      // LLM or TTS failed; the stream survives
+  }
+  uint64 utterance_id = 1;
+  Reason reason = 2;
 }

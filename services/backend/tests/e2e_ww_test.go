@@ -107,7 +107,7 @@ func runEndToEndWakeWord(t *testing.T, name, modelPath, sidecarPath, fixture str
 	var wakes []wakeword.Event
 	var sink server.Sink
 	srv := server.New()
-	srv.NewSink = func(streamID string) server.Sink {
+	srv.NewSink = func(streamID string, _ server.Sender) server.Sink {
 		sink = wakeword.NewSink(streamID, vadEngine, vadCfg, wwEngine, wwCfg,
 			func(e vad.Event) {
 				mu.Lock()

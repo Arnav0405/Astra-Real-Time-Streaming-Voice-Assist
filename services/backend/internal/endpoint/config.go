@@ -30,7 +30,15 @@ type Config struct {
 	// MaxUtteranceFrames force-closes a stuck-open utterance, bounding the
 	// buffer.
 	MaxUtteranceFrames int `json:"max_utterance_frames"`
+	// BargeInFrames is how long VAD must keep reporting speech, while the
+	// assistant is talking, before the reply is cut off. Too low and residual
+	// echo or a cough interrupts; too high and interrupting feels unresponsive.
+	BargeInFrames int `json:"barge_in_frames"`
 }
+
+// defaultBargeInFrames is 120 ms — long enough to reject a cough or a burst of
+// echo, short enough that interrupting still feels immediate.
+const defaultBargeInFrames = 6
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -43,6 +51,9 @@ func LoadConfig(path string) (*Config, error) {
 	}
 	if c.GraceFrames <= 0 || c.MinUtteranceFrames <= 0 || c.MaxUtteranceFrames <= 0 {
 		return nil, fmt.Errorf("endpoint config %s: grace/min/max frames must be > 0", path)
+	}
+	if c.BargeInFrames <= 0 {
+		c.BargeInFrames = defaultBargeInFrames
 	}
 	return &c, nil
 }

@@ -1,0 +1,6 @@
+{
+  "base_url": "https://api.naga.ac/v1",
+  "model": "gpt-4o-mini",
+  "system_prompt": "You are Astra, a voice assistant. Your reply is read aloud, so answer in one or two short spoken sentences. Never use markdown, lists, code blocks, or emoji.",
+  "max_tokens": 160
+}

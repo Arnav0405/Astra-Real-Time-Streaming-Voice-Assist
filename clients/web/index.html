@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Astra</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --line: #262c36;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --live: #3fb950;
+    --speak: #58a6ff;
+    --error: #f85149;
+    --barge: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 2rem 1.25rem;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.5 ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+    display: flex;
+    justify-content: center;
+  }
+  main { width: 100%; max-width: 44rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .25rem; letter-spacing: -.01em; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .9rem; }
+
+  .bar { display: flex; align-items: center; gap: .75rem; margin-bottom: 1.5rem; }
+  button {
+    background: var(--speak); color: #05080d; border: 0; border-radius: 6px;
+    padding: .55rem 1.4rem; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { background: var(--line); color: var(--muted); cursor: default; }
+  .dot { width: .6rem; height: .6rem; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.live { background: var(--live); }
+  .dot.speaking { background: var(--speak); }
+  .dot.busy { background: var(--barge); }
+  .dot.error { background: var(--error); }
+  #status { color: var(--muted); font-size: .9rem; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 1rem 1.1rem; margin-bottom: 1rem;
+  }
+  .panel h2 {
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .09em;
+    color: var(--muted); margin: 0 0 .5rem; font-weight: 600;
+  }
+  #transcript, #reply { min-height: 1.5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #reply { color: var(--speak); }
+
+  #log { max-height: 15rem; overflow-y: auto; font-size: .85rem; }
+  .line { padding: .2rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+  .line:last-child { border-bottom: 0; }
+  .tag {
+    display: inline-block; min-width: 4.2rem; margin-right: .6rem;
+    font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted);
+  }
+  .line.barge .tag { color: var(--barge); }
+  .line.error .tag { color: var(--error); }
+  .line.you .tag { color: var(--live); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Astra</h1>
+  <p class="sub">
+    Say the wake word, ask something, then <strong>talk over the reply</strong> — it stops.
+    Use speakers, not headphones: the echo canceller is the point.
+  </p>
+
+  <div class="bar">
+    <button id="toggle" disabled>Start</button>
+    <span id="dot" class="dot"></span>
+    <span id="status">loading…</span>
+  </div>
+
+  <section class="panel">
+    <h2>You said</h2>
+    <div id="transcript"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Astra</h2>
+    <div id="reply"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Events</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script src="protobuf.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

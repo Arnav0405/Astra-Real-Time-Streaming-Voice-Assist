@@ -49,19 +49,90 @@ type protocolError struct {
 
 func (e *protocolError) Error() string { return e.code + ": " + e.msg }
 
+// outQueue bounds the outbound backlog. Reply audio arrives at ~50 msg/s, so
+// this is several seconds of slack; a client slower than that is already gone.
+const outQueue = 256
+
+// writeTimeout bounds a single conn.Write. The write loop deliberately does
+// not use the session context: teardown writes (the final Error) must still
+// reach a client whose context was already cancelled by the fatal watcher.
+const writeTimeout = 5 * time.Second
+
+// errSessionClosed is returned by Sender once the session is tearing down.
+var errSessionClosed = errors.New("session closed")
+
 type session struct {
 	conn    *websocket.Conn
-	newSink func(streamID string) Sink
+	newSink func(streamID string, send Sender) Sink
 
 	state   sessionState
 	nextSeq uint64
 	frames  chan Frame
 	sink    Sink
 	cancel  context.CancelFunc
+
+	// Every conn.Write goes through the write loop — coder/websocket allows
+	// only one write in flight, and the sink writes replies concurrently with
+	// the read loop. outClosed is closed (out never is) so a blocked sender is
+	// released without risking a send on a closed channel.
+	out        chan []byte
+	outClosed  chan struct{}
+	writerDone chan struct{}
 }
 
-func newSession(conn *websocket.Conn, newSink func(string) Sink) *session {
-	return &session{conn: conn, newSink: newSink, state: awaitingStart}
+func newSession(conn *websocket.Conn, newSink func(string, Sender) Sink) *session {
+	return &session{
+		conn:       conn,
+		newSink:    newSink,
+		state:      awaitingStart,
+		out:        make(chan []byte, outQueue),
+		outClosed:  make(chan struct{}),
+		writerDone: make(chan struct{}),
+	}
+}
+
+// send marshals msg and hands it to the write loop, blocking only for
+// backpressure. Safe for concurrent use — this is the Sender given to sinks.
+func (s *session) send(msg *pb.ServerMessage) error {
+	b, err := proto.Marshal(msg)
+	if err != nil {
+		return err
+	}
+	select {
+	case s.out <- b:
+		return nil
+	case <-s.outClosed:
+		return errSessionClosed
+	}
+}
+
+// writeLoop is the sole writer of the connection. It drains whatever is
+// already queued after outClosed so the last reply (or the Error) still ships.
+func (s *session) writeLoop() {
+	defer close(s.writerDone)
+	for {
+		select {
+		case b := <-s.out:
+			s.write(b)
+		case <-s.outClosed:
+			for {
+				select {
+				case b := <-s.out:
+					s.write(b)
+				default:
+					return
+				}
+			}
+		}
+	}
+}
+
+func (s *session) write(b []byte) {
+	ctx, cancel := context.WithTimeout(context.Background(), writeTimeout)
+	defer cancel()
+	// A failed write means the client is gone; keep draining so no sender
+	// blocks forever waiting on a socket that will never accept again.
+	_ = s.conn.Write(ctx, websocket.MessageBinary, b)
 }
 
 // run drives the session until the client stops, disconnects, violates the
@@ -71,6 +142,8 @@ func (s *session) run(ctx context.Context) {
 	defer cancel()
 	s.cancel = cancel
 
+	go s.writeLoop()
+
 	err := s.loop(ctx)
 
 	if s.frames != nil {
@@ -78,22 +151,22 @@ func (s *session) run(ctx context.Context) {
 		s.sink.Wait()
 	}
 
+	// The sink has finished, so nothing else will send. Queue the final Error
+	// (if any), then flush the write loop before closing the connection.
+	status, reason := websocket.StatusNormalClosure, ""
 	var perr *protocolError
-	if errors.As(err, &perr) {
-		s.sendError(ctx, perr)
-		s.conn.Close(websocket.StatusPolicyViolation, perr.code)
-		return
+	switch {
+	case errors.As(err, &perr):
+		s.sendError(perr)
+		status, reason = websocket.StatusPolicyViolation, perr.code
+	case s.sink != nil && s.sink.Err() != nil:
+		s.sendError(&protocolError{codeInternal, s.sink.Err().Error()})
+		status, reason = websocket.StatusInternalError, codeInternal
 	}
-	if s.sink != nil && s.sink.Err() != nil {
-		// ctx may already be cancelled by the fatal watcher; use a fresh one
-		// so the client still gets the error before close.
-		wctx, wcancel := context.WithTimeout(context.Background(), time.Second)
-		s.sendError(wctx, &protocolError{codeInternal, s.sink.Err().Error()})
-		wcancel()
-		s.conn.Close(websocket.StatusInternalError, codeInternal)
-		return
-	}
-	s.conn.Close(websocket.StatusNormalClosure, "")
+
+	close(s.outClosed)
+	<-s.writerDone
+	s.conn.Close(status, reason)
 }
 
 func (s *session) loop(ctx context.Context) error {
@@ -151,7 +224,7 @@ func (s *session) handleStart(ctx context.Context, start *pb.StreamStart) error 
 	streamID := newStreamID()
 	s.state = streaming
 	s.frames = make(chan Frame, 32)
-	s.sink = s.newSink(streamID)
+	s.sink = s.newSink(streamID, s.send)
 	go s.sink.Run(s.frames)
 	// Abort the read loop if the sink dies mid-stream (a nil Fatal channel,
 	// as statsSink returns, never fires).
@@ -163,13 +236,9 @@ func (s *session) handleStart(ctx context.Context, start *pb.StreamStart) error 
 		}
 	}()
 
-	reply, err := proto.Marshal(&pb.ServerMessage{
+	return s.send(&pb.ServerMessage{
 		Msg: &pb.ServerMessage_StreamStarted{StreamStarted: &pb.StreamStarted{StreamId: streamID}},
 	})
-	if err != nil {
-		return err
-	}
-	return s.conn.Write(ctx, websocket.MessageBinary, reply)
 }
 
 func (s *session) handleFrame(frame *pb.AudioFrame) error {
@@ -187,14 +256,10 @@ func (s *session) handleFrame(frame *pb.AudioFrame) error {
 	return nil
 }
 
-func (s *session) sendError(ctx context.Context, perr *protocolError) {
-	data, err := proto.Marshal(&pb.ServerMessage{
+func (s *session) sendError(perr *protocolError) {
+	_ = s.send(&pb.ServerMessage{
 		Msg: &pb.ServerMessage_Error{Error: &pb.Error{Code: perr.code, Message: perr.msg}},
 	})
-	if err != nil {
-		return
-	}
-	_ = s.conn.Write(ctx, websocket.MessageBinary, data)
 }
 
 func newStreamID() string {

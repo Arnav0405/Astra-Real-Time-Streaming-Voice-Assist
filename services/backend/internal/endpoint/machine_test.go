@@ -12,20 +12,27 @@ const frameBytes = 640
 // harness drives a Machine and records emitted utterances. seq is auto-advanced
 // so frame indices stay ordered without threading a counter through each test.
 type harness struct {
-	m    *Machine
-	seq  uint64
-	utts []Utterance
+	m      *Machine
+	seq    uint64
+	utts   []Utterance
+	barges int
 }
 
 func newHarness(mode Mode, cfg *Config) *harness {
 	h := &harness{}
-	h.m = NewMachine("test", cfg, mode, func(u Utterance) { h.utts = append(h.utts, u) })
+	h.m = NewMachine("test", cfg, mode, func(u Utterance) { h.utts = append(h.utts, u) }, func() { h.barges++ })
 	return h
 }
 
 // frame feeds one PCM frame (the real sink order: event first, then OnFrame).
+// The PCM is stamped with the frame's seq so preroll tests can tell which
+// frames actually made it into an utterance.
 func (h *harness) frame() {
-	h.m.OnFrame(h.seq, make([]byte, frameBytes))
+	pcm := make([]byte, frameBytes)
+	for i := range pcm {
+		pcm[i] = byte(h.seq)
+	}
+	h.m.OnFrame(h.seq, pcm)
 	h.seq++
 }
 
@@ -39,7 +46,7 @@ func (h *harness) vadStart() { h.m.OnVad(vad.Event{Type: vad.EventStart}) }
 func (h *harness) vadEnd()   { h.m.OnVad(vad.Event{Type: vad.EventEnd}) }
 
 func testCfg() *Config {
-	return &Config{GraceFrames: 15, MinUtteranceFrames: 15, MaxUtteranceFrames: 1500}
+	return &Config{GraceFrames: 15, MinUtteranceFrames: 15, MaxUtteranceFrames: 1500, BargeInFrames: 6}
 }
 
 // (a) normal close: speech then a full grace window of silence.
@@ -131,5 +138,142 @@ func TestWakeModeArming(t *testing.T) {
 	h.frames(15)
 	if len(h.utts) != 1 {
 		t.Fatalf("wake mode: want 1 utterance after wake, got %d", len(h.utts))
+	}
+}
+
+// --- Barge-in (Phase 7b) ---------------------------------------------------
+
+// Sustained speech during playback interrupts the assistant and opens an
+// utterance, even in ArmOnWake mode where a bare speech_start would normally
+// be ignored.
+func TestBargeInFiresAfterThreshold(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+
+	h.vadStart()
+	h.frames(5) // one short of the 6-frame threshold
+	if h.barges != 0 {
+		t.Fatalf("barged after %d frames, want no fire before the threshold", 5)
+	}
+	h.frame() // the 6th confirms it
+	if h.barges != 1 {
+		t.Fatalf("barges = %d after reaching the threshold, want 1", h.barges)
+	}
+
+	// The utterance is now open and closes normally.
+	h.frames(20)
+	h.vadEnd()
+	h.frames(15)
+	if len(h.utts) != 1 {
+		t.Fatalf("want 1 utterance after barge-in, got %d", len(h.utts))
+	}
+}
+
+// A cough or a burst of echo shorter than the threshold must not cut the
+// assistant off.
+func TestShortBlipDoesNotBargeIn(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+
+	h.vadStart()
+	h.frames(3)
+	h.vadEnd()
+	h.frames(30)
+
+	if h.barges != 0 {
+		t.Errorf("barges = %d, want 0 for a blip below the threshold", h.barges)
+	}
+	if len(h.utts) != 0 {
+		t.Errorf("a sub-threshold blip opened %d utterances", len(h.utts))
+	}
+}
+
+// Two separate sub-threshold blips must not accumulate into a barge-in.
+func TestBargeInCounterResetsBetweenBlips(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+
+	for i := 0; i < 3; i++ {
+		h.vadStart()
+		h.frames(4)
+		h.vadEnd()
+		h.frames(2)
+	}
+	if h.barges != 0 {
+		t.Errorf("barges = %d, want 0 — blips must not accumulate", h.barges)
+	}
+}
+
+// The interrupting words must survive: the utterance starts at the frame where
+// speech began, not at the frame the threshold was reached.
+func TestBargeInKeepsOnsetViaPreroll(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+
+	h.frames(20) // assistant talking, user silent
+	onset := h.seq
+	h.vadStart()
+	h.frames(6) // triggers the barge-in on the 6th
+
+	h.frames(20)
+	h.vadEnd()
+	h.frames(15)
+
+	if len(h.utts) != 1 {
+		t.Fatalf("want 1 utterance, got %d", len(h.utts))
+	}
+	u := h.utts[0]
+	if u.StartSeq > onset {
+		t.Errorf("utterance starts at seq %d, after speech onset at %d — the first words were lost", u.StartSeq, onset)
+	}
+	// The onset frame's stamped PCM must actually be present in the buffer.
+	want := byte(onset)
+	found := false
+	for i := 0; i < len(u.PCM); i += frameBytes {
+		if u.PCM[i] == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("frame %d (stamp %d) missing from the utterance buffer", onset, want)
+	}
+}
+
+// A reply that finishes on its own returns to idle without opening anything.
+func TestSpeakingEndReturnsToIdle(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+	h.frames(10)
+	h.m.SetSpeaking(false)
+
+	// In ArmOnWake mode a bare speech_start from idle must still be ignored.
+	h.vadStart()
+	h.frames(30)
+	h.vadEnd()
+	h.frames(15)
+
+	if h.barges != 0 {
+		t.Errorf("barges = %d after the reply ended, want 0", h.barges)
+	}
+	if len(h.utts) != 0 {
+		t.Errorf("speech after the reply ended opened %d utterances without a wake word", len(h.utts))
+	}
+}
+
+// A turn must not start while an utterance is still open.
+func TestSpeakingStartIgnoredWhileCapturing(t *testing.T) {
+	h := newHarness(ArmOnVad, testCfg())
+	h.vadStart()
+	h.frames(20)
+	h.m.SetSpeaking(true) // must be a no-op while an utterance is open
+
+	h.vadEnd()
+	h.frames(15)
+	if len(h.utts) != 1 {
+		t.Fatalf("want 1 utterance, got %d — OnSpeakingStart disrupted an open capture", len(h.utts))
+	}
+	if got := h.utts[0].FrameCount; got != 20 {
+		t.Errorf("FrameCount = %d, want 20", got)
 	}
 }

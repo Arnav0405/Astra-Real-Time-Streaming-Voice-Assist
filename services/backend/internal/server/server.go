@@ -8,6 +8,8 @@ import (
 	"net/http"
 
 	"github.com/coder/websocket"
+
+	"github.com/arnav/astra/services/backend/internal/pb"
 )
 
 // Frame is one validated 20 ms chunk of PCM audio from a Stream.
@@ -16,15 +18,22 @@ type Frame struct {
 	PCM []byte
 }
 
+// Sender writes one ServerMessage to the client. It is safe for concurrent
+// use and returns an error once the session is tearing down, so a reply in
+// flight when the client disconnects fails instead of blocking. Sinks that
+// talk back to the client (Phase 7) hold one.
+type Sender func(*pb.ServerMessage) error
+
 // Server upgrades HTTP requests to WebSocket sessions. NewSink is the seam
-// downstream stages plug into; it is called once per session.
+// downstream stages plug into; it is called once per session, with the
+// session's Sender.
 type Server struct {
-	NewSink func(streamID string) Sink
+	NewSink func(streamID string, send Sender) Sink
 }
 
 // New returns a Server wired to the default stats sink.
 func New() *Server {
-	return &Server{NewSink: func(streamID string) Sink { return newStatsSink(streamID) }}
+	return &Server{NewSink: func(streamID string, _ Sender) Sink { return newStatsSink(streamID) }}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {

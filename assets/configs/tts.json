@@ -1,0 +1,7 @@
+{
+  "base_url": "https://api.naga.ac/v1",
+  "model": "tts-1",
+  "voice": "alloy",
+  "format": "pcm",
+  "sample_rate_hz": 24000
+}

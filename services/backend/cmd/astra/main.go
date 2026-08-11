@@ -11,22 +11,37 @@ import (
 
 	"github.com/arnav/astra/services/backend/internal/asr"
 	"github.com/arnav/astra/services/backend/internal/endpoint"
+	"github.com/arnav/astra/services/backend/internal/llm"
 	"github.com/arnav/astra/services/backend/internal/server"
+	"github.com/arnav/astra/services/backend/internal/tts"
+	"github.com/arnav/astra/services/backend/internal/turn"
 	"github.com/arnav/astra/services/backend/internal/vad"
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
 
-// drainSink lets the ASR worker finish queued/in-flight transcriptions after
-// the stream's frames are drained. Close runs in the background so socket
-// teardown never waits on a slow transcription HTTP call.
+// drainSink lets the per-stream workers finish after the stream's frames are
+// drained. It runs in the background so socket teardown never waits on a slow
+// transcription HTTP call.
+//
+// The reply runner is closed first: the client is already gone, so a reply
+// still in flight is audio nobody will hear. Draining ASR afterwards may hand
+// it one last transcript, which a closed runner ignores.
 type drainSink struct {
 	server.Sink
 	worker *asr.Worker
+	runner *turn.Runner
 }
 
 func (s drainSink) Run(frames <-chan server.Frame) {
 	s.Sink.Run(frames)
-	go s.worker.Close()
+	go func() {
+		if s.runner != nil {
+			s.runner.Close()
+		}
+		if s.worker != nil {
+			s.worker.Close()
+		}
+	}()
 }
 
 func main() {
@@ -40,7 +55,11 @@ func main() {
 	endpointWavDir := flag.String("endpoint-wav-dir", "", "if set, dump each closed utterance here as WAV (debug/verification)")
 	asrConfig := flag.String("asr-config", "../../assets/configs/asr.json", "path to ASR (transcription) config")
 	noASR := flag.Bool("no-asr", false, "disable transcription (VAD/wake/endpointing only)")
+	llmConfig := flag.String("llm-config", "../../assets/configs/llm.json", "path to LLM (reply) config")
+	ttsConfig := flag.String("tts-config", "../../assets/configs/tts.json", "path to TTS (speech synthesis) config")
+	noReply := flag.Bool("no-reply", false, "disable the spoken reply (transcribe only, no LLM/TTS/barge-in)")
 	envFile := flag.String("env-file", "../../.env", "path to .env file with NAGA_API_KEY (already-exported env wins)")
+	webDir := flag.String("web-dir", "../../clients/web", "directory served at /app/ (the browser demo client); empty disables it")
 	verbose := flag.Bool("verbose", false, "log the per-stream pipeline trace (VAD speech/silence, wake, utterance)")
 	flag.Parse()
 
@@ -81,18 +100,47 @@ func main() {
 		log.Printf("asr enabled: %s model %s", acfg.BaseURL, acfg.Model)
 	}
 
+	// The reply needs something to reply to, so it follows ASR: with -no-asr
+	// there is no transcript and nothing to say.
+	var llmClient *llm.Client
+	var ttsClient *tts.Client
+	switch {
+	case *noReply:
+		log.Print("reply disabled (-no-reply): transcripts will not be answered")
+	case asrClient == nil:
+		log.Print("reply disabled: it needs a transcript, and asr is off")
+	default:
+		godotenv.Load(*envFile)
+		key := os.Getenv("NAGA_API_KEY")
+		if key == "" {
+			log.Fatalf("NAGA_API_KEY not set (checked environment and %s); pass -no-reply to run without spoken replies", *envFile)
+		}
+		lcfg, err := llm.LoadConfig(*llmConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
+		tcfg, err := tts.LoadConfig(*ttsConfig)
+		if err != nil {
+			log.Fatal(err)
+		}
+		llmClient = llm.NewClient(lcfg, key)
+		ttsClient = tts.NewClient(tcfg, key)
+		log.Printf("reply enabled: llm %s, tts %s voice %s @ %d Hz",
+			lcfg.Model, tcfg.Model, tcfg.Voice, tcfg.SampleRateHz)
+	}
+
 	// onUtterance for a stream: optional WAV dumper (-endpoint-wav-dir), then
 	// the ASR worker; with neither, nil (the machine logs each utterance).
 	// Per-stream because the dumper owns its filename counter and the worker
 	// its queue. Under -verbose, wrap it so the utterance end is always logged.
 	// The returned worker is nil when ASR is disabled.
-	makeOnUtterance := func(streamID string) (func(endpoint.Utterance), *asr.Worker) {
+	makeOnUtterance := func(streamID string, onTranscript func(asr.Transcript)) (func(endpoint.Utterance), *asr.Worker) {
 		var next func(endpoint.Utterance)
 		var worker *asr.Worker
 		if asrClient != nil {
-			// nil onTranscript = server-side transcript log; Phase 7's LLM
-			// consumer plugs in here.
-			worker = asr.NewWorker(streamID, asrClient, nil)
+			// A nil onTranscript logs the transcript server-side; the reply
+			// runner is what plugs in here once replies are enabled.
+			worker = asr.NewWorker(streamID, asrClient, onTranscript)
 			next = func(u endpoint.Utterance) { worker.Enqueue(u) }
 		}
 		if *endpointWavDir != "" {
@@ -121,13 +169,48 @@ func main() {
 		}, worker
 	}
 
-	// withDrain wraps a sink so the stream's ASR worker drains after the
-	// frame channel closes (Q10: last words still transcribe).
-	withDrain := func(s server.Sink, w *asr.Worker) server.Sink {
-		if w == nil {
+	// withDrain wraps a sink so the stream's workers unwind after the frame
+	// channel closes (Q10: last words still transcribe).
+	withDrain := func(s server.Sink, w *asr.Worker, r *turn.Runner) server.Sink {
+		if w == nil && r == nil {
 			return s
 		}
-		return drainSink{Sink: s, worker: w}
+		return drainSink{Sink: s, worker: w, runner: r}
+	}
+
+	replyEnabled := llmClient != nil && ttsClient != nil
+
+	// buildTurn wires one stream's endpoint machine to its reply runner. The
+	// two reference each other by design — the machine cancels the reply on
+	// barge-in, the runner tells the machine when playback starts and stops —
+	// so the machine is built first and the runner reached through a closure.
+	buildTurn := func(streamID string, send server.Sender, mode endpoint.Mode) (*endpoint.Machine, *asr.Worker, *turn.Runner) {
+		var runner *turn.Runner
+
+		var onTranscript func(asr.Transcript)
+		if replyEnabled {
+			onTranscript = func(t asr.Transcript) {
+				if *verbose {
+					log.Printf("[%s] TEXT 💬 %q", streamID, t.Text)
+				}
+				runner.Start(t)
+			}
+		}
+		onUtt, worker := makeOnUtterance(streamID, onTranscript)
+
+		m := endpoint.NewMachine(streamID, epCfg, mode, onUtt, func() {
+			if runner == nil {
+				return
+			}
+			if *verbose {
+				log.Printf("[%s] BARG ✋ user talked over the reply — cancelling", streamID)
+			}
+			runner.Barge()
+		})
+		if replyEnabled {
+			runner = turn.NewRunner(streamID, send, llmClient, ttsClient, ttsClient.SampleRateHz(), m.SetSpeaking)
+		}
+		return m, worker, runner
 	}
 
 	// Under -verbose, tee the VAD/wake events to the log before the endpoint
@@ -158,10 +241,9 @@ func main() {
 
 	srv := server.New()
 	if *wwModel == "" {
-		srv.NewSink = func(streamID string) server.Sink {
-			onUtt, worker := makeOnUtterance(streamID)
-			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnVad, onUtt)
-			return withDrain(vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame), worker)
+		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
+			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnVad)
+			return withDrain(vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame), worker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
@@ -180,16 +262,28 @@ func main() {
 			log.Fatal(err)
 		}
 		defer wwEngine.Close()
-		srv.NewSink = func(streamID string) server.Sink {
-			onUtt, worker := makeOnUtterance(streamID)
-			m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnWake, onUtt)
+		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
+			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnWake)
 			return withDrain(wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
-				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame), worker)
+				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame), worker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word: %s)", *addr, *vadModel, *wwModel)
 	}
 
-	if err := http.ListenAndServe(*addr, srv); err != nil {
+	// The browser demo is served under /app/ so the WebSocket keeps the root
+	// path the Python mic client already uses.
+	mux := http.NewServeMux()
+	mux.Handle("/", srv)
+	if *webDir != "" {
+		if _, err := os.Stat(*webDir); err != nil {
+			log.Printf("web client disabled: %v", err)
+		} else {
+			mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.Dir(*webDir))))
+			log.Printf("web client: http://localhost%s/app/", *addr)
+		}
+	}
+
+	if err := http.ListenAndServe(*addr, mux); err != nil {
 		log.Fatal(err)
 	}
 }
