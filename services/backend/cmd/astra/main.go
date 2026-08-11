@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 
@@ -33,8 +34,8 @@ func main() {
 	ortLib := flag.String("ort-lib", "", "path to onnxruntime shared library (default: $ASTRA_ORT_LIB, then well-known paths)")
 	vadModel := flag.String("vad-model", "../../assets/models/vad/vad_v1.onnx", "path to VAD ONNX model (default assumes running from services/backend)")
 	vadConfig := flag.String("vad-config", "../../assets/models/vad/vad_v1.json", "path to VAD sidecar config")
-	wwModel := flag.String("ww-model", "", "path to merged wake-word ONNX model; empty disables wake word (VAD-only sink)")
-	wwConfig := flag.String("ww-config", "../../assets/models/wakeword/ww_v1.json", "path to wake-word sidecar config")
+	wwModel := flag.String("ww-model", "../../assets/models/wakeword/ww_v2.onnx", "path to merged wake-word ONNX model; empty disables wake word (VAD-only sink)")
+	wwConfig := flag.String("ww-config", "", "path to wake-word sidecar config (default: the model path with .onnx -> .json)")
 	endpointConfig := flag.String("endpoint-config", "../../assets/configs/endpoint.json", "path to endpoint (utterance) config")
 	endpointWavDir := flag.String("endpoint-wav-dir", "", "if set, dump each closed utterance here as WAV (debug/verification)")
 	asrConfig := flag.String("asr-config", "../../assets/configs/asr.json", "path to ASR (transcription) config")
@@ -164,7 +165,13 @@ func main() {
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
-		wwCfg, err := wakeword.LoadConfig(*wwConfig)
+		// Sidecar defaults to the model's own .json: the v1/v2 frontends differ
+		// (mel bins, window length), so a stale -ww-config silently mis-scores.
+		sidecar := *wwConfig
+		if sidecar == "" {
+			sidecar = strings.TrimSuffix(*wwModel, ".onnx") + ".json"
+		}
+		wwCfg, err := wakeword.LoadConfig(sidecar)
 		if err != nil {
 			log.Fatal(err)
 		}

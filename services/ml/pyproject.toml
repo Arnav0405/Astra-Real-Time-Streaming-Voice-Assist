@@ -19,6 +19,7 @@ dependencies = [
     "openwakeword",
     "piper-sample-generator==3.2.0",
     "sounddevice>=0.5.5",
+    "websockets>=13.0", # clients/mic/mic_client.py runs in this venv
 ]
 
 [build-system]

@@ -8,13 +8,15 @@ pipeline in the terminal. Two terminals: server + mic client.
 ```bash
 cd services/backend
 
-# Wake-word mode (VAD gates OWW; utterance arms on the wake word "Astraa"):
+# Wake-word mode — ww_v2 (BC-ResNet KWS) is the default model:
+go run ./cmd/astra -verbose -endpoint-wav-dir /tmp/utt
+
+# …the older OWW v1 model (sidecar is derived from the model path):
 go run ./cmd/astra -verbose \
-  -ww-model ../../assets/models/wakeword/ww_v1.onnx \
-  -endpoint-wav-dir /tmp/utt
+  -ww-model ../../assets/models/wakeword/ww_v1.onnx
 
 # …or VAD-only mode (utterance arms on speech onset, no wake word needed):
-go run ./cmd/astra -verbose -endpoint-wav-dir /tmp/utt
+go run ./cmd/astra -verbose -ww-model= -endpoint-wav-dir /tmp/utt
 ```
 
 Needs the ONNX Runtime shared lib (`brew install onnxruntime`; override with
@@ -30,6 +32,17 @@ services/ml/.venv/bin/python clients/mic/mic_client.py
 
 Speak, then stop with **`q`** (or Ctrl+Q / Ctrl+C) — it sends StreamStop and
 closes cleanly.
+
+### Repeatable check without speaking
+
+`TestLiveWakeWord` runs this same two-terminal setup automatically — it builds
+and launches the real `astra` binary, streams the committed golden clip over a
+real WebSocket, and requires the wake word to fire on the frame the Python
+reference produced:
+
+```bash
+cd services/backend && go test ./tests -run TestLiveWakeWord -v
+```
 
 ## What you'll see (server terminal, wake-word mode)
 

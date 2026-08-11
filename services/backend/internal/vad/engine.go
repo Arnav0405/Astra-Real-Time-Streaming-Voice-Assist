@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"os"
+	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -16,8 +17,21 @@ var DefaultLibPaths = []string{
 }
 
 // Init loads the ONNX Runtime shared library and initializes the environment.
-// Call once at startup. libPath "" probes DefaultLibPaths.
+// The runtime environment is process-global, so Init is idempotent: repeat
+// calls return the first call's result instead of onnxruntime's "already been
+// initialized" error (which tests used to mistake for a missing runtime and
+// skip on). libPath "" probes DefaultLibPaths.
 func Init(libPath string) error {
+	initOnce.Do(func() { initErr = doInit(libPath) })
+	return initErr
+}
+
+var (
+	initOnce sync.Once
+	initErr  error
+)
+
+func doInit(libPath string) error {
 	if libPath == "" {
 		libPath = os.Getenv("ASTRA_ORT_LIB")
 	}
