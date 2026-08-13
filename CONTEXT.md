@@ -16,7 +16,7 @@ Per-Frame classification of speech vs. non-speech, produced by the custom VAD mo
 
 ## Wake Word
 
-The specific spoken phrase that activates Astra. Wake Word Detection is the stage that spots it in a Stream; until it fires, downstream stages stay idle.
+The specific spoken phrase that activates Astra. Wake Word Detection is the stage that spots it in a Stream. It is what starts a conversation: until it fires, downstream stages stay idle. It is not required to *continue* one — interrupting a reply is a Barge-in, which needs no wake word.
 
 ## Endpointing
 
@@ -24,8 +24,20 @@ The decision that a speaker has finished talking. Derived heuristically from the
 
 ## Utterance
 
-The span of a Stream from wake-word activation (or speech onset) to Endpointing. The unit sent for transcription.
+The span of a Stream from an arming trigger to Endpointing — wake-word activation, speech onset in VAD-only mode, or a confirmed Barge-in. The unit sent for transcription.
 
 ## Transcript
 
-The text produced by transcribing one Utterance. Input to the LLM.
+The text produced by transcribing one Utterance. Input to the LLM, and the trigger for a Turn.
+
+## Turn
+
+One complete reply: a Transcript in, streamed reply text and synthesized audio out. Exactly one Turn is in flight per Stream at a time, and a Turn can be cancelled part-way through — unlike every stage before it, which runs to completion.
+
+## Barge-in
+
+The user talking over a Turn while it is playing. Detected server-side from sustained VAD speech during playback, never reported by the client. Confirming one cancels the Turn and opens a new Utterance, so a Barge-in is both an interruption and an arming trigger.
+
+## Speaking
+
+The state in which Astra is playing a Turn's audio back. The only state a Barge-in can occur in, and the only one where speech arms an Utterance without a Wake Word.

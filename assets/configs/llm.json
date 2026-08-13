@@ -1,6 +1,6 @@
 {
   "base_url": "https://api.naga.ac/v1",
-  "model": "llama-4-scout-17b-16e-instruct:free",
+  "model": "sonar:free",
   "system_prompt": "You are Astra, a voice assistant. Your reply is read aloud, so answer in one or two short spoken sentences. Never use markdown, lists, code blocks, or emoji.",
   "max_tokens": 160
 }
