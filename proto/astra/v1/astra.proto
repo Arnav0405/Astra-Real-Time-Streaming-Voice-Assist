@@ -46,6 +46,7 @@ message ServerMessage {
     ReplyAudio reply_audio = 5;
     ReplyEnd reply_end = 6;
     Cancel cancel = 7;
+    Turn turn = 8;
   }
 }
 
@@ -92,6 +93,29 @@ message ReplyAudio {
 // the user actually perceives as the interruption.
 message Cancel {
   uint64 utterance_id = 1;
+}
+
+// One measured stage of a latency chain. start_ms is relative to the chain's
+// T0, so a client draws a waterfall straight from these two numbers.
+message Span {
+  string name = 1;
+  uint32 start_ms = 2;
+  uint32 dur_ms = 3;
+}
+
+// The latency breakdown of one chain, sent as soon as the chain completes —
+// for a turn that is the first ReplyAudio, not ReplyEnd, since a long reply
+// would otherwise delay the numbers far past the moment they describe.
+//
+// Every boundary is stamped server-side. The turn chain therefore ends at the
+// first reply audio *written to the socket*: what the client does after that
+// (decode, schedule, play) is on the client's clock and is not measured here.
+message Turn {
+  uint64 utterance_id = 1;
+  string chain = 2; // "turn" or "barge"
+  repeated Span spans = 3;
+  // Time to first audio, excluding how long the user spoke. Turn chain only.
+  uint32 headline_ms = 4;
 }
 
 // Terminates a turn. Exactly one per turn that produced any reply.

@@ -70,7 +70,7 @@ func (x ReplyEnd_Reason) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ReplyEnd_Reason.Descriptor instead.
 func (ReplyEnd_Reason) EnumDescriptor() ([]byte, []int) {
-	return file_astra_v1_astra_proto_rawDescGZIP(), []int{11, 0}
+	return file_astra_v1_astra_proto_rawDescGZIP(), []int{13, 0}
 }
 
 // Client -> server envelope. Exactly one StreamStart per connection,
@@ -349,6 +349,7 @@ type ServerMessage struct {
 	//	*ServerMessage_ReplyAudio
 	//	*ServerMessage_ReplyEnd
 	//	*ServerMessage_Cancel
+	//	*ServerMessage_Turn
 	Msg           isServerMessage_Msg `protobuf_oneof:"msg"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -454,6 +455,15 @@ func (x *ServerMessage) GetCancel() *Cancel {
 	return nil
 }
 
+func (x *ServerMessage) GetTurn() *Turn {
+	if x != nil {
+		if x, ok := x.Msg.(*ServerMessage_Turn); ok {
+			return x.Turn
+		}
+	}
+	return nil
+}
+
 type isServerMessage_Msg interface {
 	isServerMessage_Msg()
 }
@@ -486,6 +496,10 @@ type ServerMessage_Cancel struct {
 	Cancel *Cancel `protobuf:"bytes,7,opt,name=cancel,proto3,oneof"`
 }
 
+type ServerMessage_Turn struct {
+	Turn *Turn `protobuf:"bytes,8,opt,name=turn,proto3,oneof"`
+}
+
 func (*ServerMessage_StreamStarted) isServerMessage_Msg() {}
 
 func (*ServerMessage_Error) isServerMessage_Msg() {}
@@ -499,6 +513,8 @@ func (*ServerMessage_ReplyAudio) isServerMessage_Msg() {}
 func (*ServerMessage_ReplyEnd) isServerMessage_Msg() {}
 
 func (*ServerMessage_Cancel) isServerMessage_Msg() {}
+
+func (*ServerMessage_Turn) isServerMessage_Msg() {}
 
 type StreamStarted struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -827,6 +843,144 @@ func (x *Cancel) GetUtteranceId() uint64 {
 	return 0
 }
 
+// One measured stage of a latency chain. start_ms is relative to the chain's
+// T0, so a client draws a waterfall straight from these two numbers.
+type Span struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	StartMs       uint32                 `protobuf:"varint,2,opt,name=start_ms,json=startMs,proto3" json:"start_ms,omitempty"`
+	DurMs         uint32                 `protobuf:"varint,3,opt,name=dur_ms,json=durMs,proto3" json:"dur_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Span) Reset() {
+	*x = Span{}
+	mi := &file_astra_v1_astra_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Span) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Span) ProtoMessage() {}
+
+func (x *Span) ProtoReflect() protoreflect.Message {
+	mi := &file_astra_v1_astra_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Span.ProtoReflect.Descriptor instead.
+func (*Span) Descriptor() ([]byte, []int) {
+	return file_astra_v1_astra_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *Span) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Span) GetStartMs() uint32 {
+	if x != nil {
+		return x.StartMs
+	}
+	return 0
+}
+
+func (x *Span) GetDurMs() uint32 {
+	if x != nil {
+		return x.DurMs
+	}
+	return 0
+}
+
+// The latency breakdown of one chain, sent as soon as the chain completes —
+// for a turn that is the first ReplyAudio, not ReplyEnd, since a long reply
+// would otherwise delay the numbers far past the moment they describe.
+//
+// Every boundary is stamped server-side. The turn chain therefore ends at the
+// first reply audio *written to the socket*: what the client does after that
+// (decode, schedule, play) is on the client's clock and is not measured here.
+type Turn struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	UtteranceId uint64                 `protobuf:"varint,1,opt,name=utterance_id,json=utteranceId,proto3" json:"utterance_id,omitempty"`
+	Chain       string                 `protobuf:"bytes,2,opt,name=chain,proto3" json:"chain,omitempty"` // "turn" or "barge"
+	Spans       []*Span                `protobuf:"bytes,3,rep,name=spans,proto3" json:"spans,omitempty"`
+	// Time to first audio, excluding how long the user spoke. Turn chain only.
+	HeadlineMs    uint32 `protobuf:"varint,4,opt,name=headline_ms,json=headlineMs,proto3" json:"headline_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Turn) Reset() {
+	*x = Turn{}
+	mi := &file_astra_v1_astra_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Turn) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Turn) ProtoMessage() {}
+
+func (x *Turn) ProtoReflect() protoreflect.Message {
+	mi := &file_astra_v1_astra_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Turn.ProtoReflect.Descriptor instead.
+func (*Turn) Descriptor() ([]byte, []int) {
+	return file_astra_v1_astra_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *Turn) GetUtteranceId() uint64 {
+	if x != nil {
+		return x.UtteranceId
+	}
+	return 0
+}
+
+func (x *Turn) GetChain() string {
+	if x != nil {
+		return x.Chain
+	}
+	return ""
+}
+
+func (x *Turn) GetSpans() []*Span {
+	if x != nil {
+		return x.Spans
+	}
+	return nil
+}
+
+func (x *Turn) GetHeadlineMs() uint32 {
+	if x != nil {
+		return x.HeadlineMs
+	}
+	return 0
+}
+
 // Terminates a turn. Exactly one per turn that produced any reply.
 type ReplyEnd struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -838,7 +992,7 @@ type ReplyEnd struct {
 
 func (x *ReplyEnd) Reset() {
 	*x = ReplyEnd{}
-	mi := &file_astra_v1_astra_proto_msgTypes[11]
+	mi := &file_astra_v1_astra_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -850,7 +1004,7 @@ func (x *ReplyEnd) String() string {
 func (*ReplyEnd) ProtoMessage() {}
 
 func (x *ReplyEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_astra_v1_astra_proto_msgTypes[11]
+	mi := &file_astra_v1_astra_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,7 +1017,7 @@ func (x *ReplyEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplyEnd.ProtoReflect.Descriptor instead.
 func (*ReplyEnd) Descriptor() ([]byte, []int) {
-	return file_astra_v1_astra_proto_rawDescGZIP(), []int{11}
+	return file_astra_v1_astra_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *ReplyEnd) GetUtteranceId() uint64 {
@@ -902,7 +1056,7 @@ const file_astra_v1_astra_proto_rawDesc = "" +
 	"\x03seq\x18\x01 \x01(\x04R\x03seq\x12\x10\n" +
 	"\x03pcm\x18\x02 \x01(\fR\x03pcm\"\f\n" +
 	"\n" +
-	"StreamStop\"\x8a\x03\n" +
+	"StreamStop\"\xb0\x03\n" +
 	"\rServerMessage\x12@\n" +
 	"\x0estream_started\x18\x01 \x01(\v2\x17.astra.v1.StreamStartedH\x00R\rstreamStarted\x12'\n" +
 	"\x05error\x18\x02 \x01(\v2\x0f.astra.v1.ErrorH\x00R\x05error\x126\n" +
@@ -914,7 +1068,8 @@ const file_astra_v1_astra_proto_rawDesc = "" +
 	"\vreply_audio\x18\x05 \x01(\v2\x14.astra.v1.ReplyAudioH\x00R\n" +
 	"replyAudio\x121\n" +
 	"\treply_end\x18\x06 \x01(\v2\x12.astra.v1.ReplyEndH\x00R\breplyEnd\x12*\n" +
-	"\x06cancel\x18\a \x01(\v2\x10.astra.v1.CancelH\x00R\x06cancelB\x05\n" +
+	"\x06cancel\x18\a \x01(\v2\x10.astra.v1.CancelH\x00R\x06cancel\x12$\n" +
+	"\x04turn\x18\b \x01(\v2\x0e.astra.v1.TurnH\x00R\x04turnB\x05\n" +
 	"\x03msg\",\n" +
 	"\rStreamStarted\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\"5\n" +
@@ -936,7 +1091,17 @@ const file_astra_v1_astra_proto_rawDesc = "" +
 	"\x03pcm\x18\x03 \x01(\fR\x03pcm\x12$\n" +
 	"\x0esample_rate_hz\x18\x04 \x01(\rR\fsampleRateHz\"+\n" +
 	"\x06Cancel\x12!\n" +
-	"\futterance_id\x18\x01 \x01(\x04R\vutteranceId\"\xa6\x01\n" +
+	"\futterance_id\x18\x01 \x01(\x04R\vutteranceId\"L\n" +
+	"\x04Span\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
+	"\bstart_ms\x18\x02 \x01(\rR\astartMs\x12\x15\n" +
+	"\x06dur_ms\x18\x03 \x01(\rR\x05durMs\"\x86\x01\n" +
+	"\x04Turn\x12!\n" +
+	"\futterance_id\x18\x01 \x01(\x04R\vutteranceId\x12\x14\n" +
+	"\x05chain\x18\x02 \x01(\tR\x05chain\x12$\n" +
+	"\x05spans\x18\x03 \x03(\v2\x0e.astra.v1.SpanR\x05spans\x12\x1f\n" +
+	"\vheadline_ms\x18\x04 \x01(\rR\n" +
+	"headlineMs\"\xa6\x01\n" +
 	"\bReplyEnd\x12!\n" +
 	"\futterance_id\x18\x01 \x01(\x04R\vutteranceId\x121\n" +
 	"\x06reason\x18\x02 \x01(\x0e2\x19.astra.v1.ReplyEnd.ReasonR\x06reason\"D\n" +
@@ -959,7 +1124,7 @@ func file_astra_v1_astra_proto_rawDescGZIP() []byte {
 }
 
 var file_astra_v1_astra_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_astra_v1_astra_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_astra_v1_astra_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_astra_v1_astra_proto_goTypes = []any{
 	(ReplyEnd_Reason)(0),  // 0: astra.v1.ReplyEnd.Reason
 	(*ClientMessage)(nil), // 1: astra.v1.ClientMessage
@@ -973,7 +1138,9 @@ var file_astra_v1_astra_proto_goTypes = []any{
 	(*ReplyDelta)(nil),    // 9: astra.v1.ReplyDelta
 	(*ReplyAudio)(nil),    // 10: astra.v1.ReplyAudio
 	(*Cancel)(nil),        // 11: astra.v1.Cancel
-	(*ReplyEnd)(nil),      // 12: astra.v1.ReplyEnd
+	(*Span)(nil),          // 12: astra.v1.Span
+	(*Turn)(nil),          // 13: astra.v1.Turn
+	(*ReplyEnd)(nil),      // 14: astra.v1.ReplyEnd
 }
 var file_astra_v1_astra_proto_depIdxs = []int32{
 	2,  // 0: astra.v1.ClientMessage.stream_start:type_name -> astra.v1.StreamStart
@@ -984,14 +1151,16 @@ var file_astra_v1_astra_proto_depIdxs = []int32{
 	8,  // 5: astra.v1.ServerMessage.transcript:type_name -> astra.v1.Transcript
 	9,  // 6: astra.v1.ServerMessage.reply_delta:type_name -> astra.v1.ReplyDelta
 	10, // 7: astra.v1.ServerMessage.reply_audio:type_name -> astra.v1.ReplyAudio
-	12, // 8: astra.v1.ServerMessage.reply_end:type_name -> astra.v1.ReplyEnd
+	14, // 8: astra.v1.ServerMessage.reply_end:type_name -> astra.v1.ReplyEnd
 	11, // 9: astra.v1.ServerMessage.cancel:type_name -> astra.v1.Cancel
-	0,  // 10: astra.v1.ReplyEnd.reason:type_name -> astra.v1.ReplyEnd.Reason
-	11, // [11:11] is the sub-list for method output_type
-	11, // [11:11] is the sub-list for method input_type
-	11, // [11:11] is the sub-list for extension type_name
-	11, // [11:11] is the sub-list for extension extendee
-	0,  // [0:11] is the sub-list for field type_name
+	13, // 10: astra.v1.ServerMessage.turn:type_name -> astra.v1.Turn
+	12, // 11: astra.v1.Turn.spans:type_name -> astra.v1.Span
+	0,  // 12: astra.v1.ReplyEnd.reason:type_name -> astra.v1.ReplyEnd.Reason
+	13, // [13:13] is the sub-list for method output_type
+	13, // [13:13] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_astra_v1_astra_proto_init() }
@@ -1012,6 +1181,7 @@ func file_astra_v1_astra_proto_init() {
 		(*ServerMessage_ReplyAudio)(nil),
 		(*ServerMessage_ReplyEnd)(nil),
 		(*ServerMessage_Cancel)(nil),
+		(*ServerMessage_Turn)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1019,7 +1189,7 @@ func file_astra_v1_astra_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_astra_v1_astra_proto_rawDesc), len(file_astra_v1_astra_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   12,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

@@ -15,6 +15,7 @@ const els = {
   transcript: document.getElementById('transcript'),
   reply: document.getElementById('reply'),
   log: document.getElementById('log'),
+  waterfall: document.getElementById('waterfall'),
 };
 
 let ClientMessage, ServerMessage;
@@ -97,6 +98,88 @@ function log(kind, text) {
   line.append(tag, document.createTextNode(text));
   els.log.prepend(line);
   while (els.log.childElementCount > 100) els.log.lastElementChild.remove();
+}
+
+// --- Latency waterfall ----------------------------------------------------
+//
+// Every boundary in a Turn message was stamped on the server, so the bars end
+// at "written to the socket". What happens after that — this page decoding,
+// scheduling and playing the audio — runs on a different clock and is not in
+// the picture.
+//
+// The two chains are drawn on separate scales on purpose. A ~200 ms barge-in
+// next to a ~2 s turn would be a sliver, so the barge block is normalised to
+// its own width and says so, rather than being silently stretched.
+
+const MAX_TURNS = 5;
+const turnBlocks = new Map(); // utterance_id -> element
+
+function bar(name, startMs, durMs, total, muted) {
+  const row = document.createElement('div');
+  row.className = 'span' + (muted ? ' muted' : '');
+
+  const label = document.createElement('span');
+  label.className = 'name';
+  label.textContent = name;
+
+  const track = document.createElement('div');
+  track.className = 'track';
+  const fill = document.createElement('div');
+  fill.className = 'fill';
+  fill.style.marginLeft = (100 * startMs / total) + '%';
+  fill.style.width = (100 * durMs / total) + '%';
+  track.append(fill);
+
+  const ms = document.createElement('span');
+  ms.className = 'ms';
+  ms.textContent = durMs + ' ms';
+
+  row.append(label, track, ms);
+  return row;
+}
+
+function chainWidth(spans) {
+  // Bars are positioned against the chain's own span, never a fixed scale.
+  return Math.max(1, ...spans.map((s) => (s.startMs || 0) + (s.durMs || 0)));
+}
+
+function renderTurn(t) {
+  const spans = t.spans || [];
+  if (!spans.length) return;
+  const uid = String(t.utteranceId);
+
+  if (t.chain === 'barge') {
+    const block = turnBlocks.get(uid);
+    if (!block || block.querySelector('.barge-block')) return;
+    const total = chainWidth(spans);
+    const wrap = document.createElement('div');
+    wrap.className = 'barge-block';
+    const head = document.createElement('div');
+    head.className = 'barge-head';
+    head.innerHTML = '✋ barged <span>— own scale, ' + total + ' ms full width</span>';
+    wrap.append(head, ...spans.map((s) => bar(s.name, s.startMs || 0, s.durMs || 0, total, false)));
+    block.append(wrap);
+    return;
+  }
+
+  const total = chainWidth(spans);
+  const block = document.createElement('div');
+  block.className = 'turn';
+
+  const head = document.createElement('div');
+  head.className = 'turn-head';
+  head.innerHTML = '<span>turn ' + uid + '</span><span><b>' +
+    (t.headlineMs || 0) + ' ms</b> to first audio</span>';
+  block.append(head, ...spans.map((s) =>
+    bar(s.name, s.startMs || 0, s.durMs || 0, total, s.name === 'user_speech')));
+
+  els.waterfall.prepend(block);
+  turnBlocks.set(uid, block);
+  while (els.waterfall.childElementCount > MAX_TURNS) {
+    const oldest = els.waterfall.lastElementChild;
+    for (const [k, v] of turnBlocks) if (v === oldest) turnBlocks.delete(k);
+    oldest.remove();
+  }
 }
 
 // --- Session --------------------------------------------------------------
@@ -192,6 +275,10 @@ function handle(msg) {
     case 'replyEnd':
       if (msg.replyEnd.reason === 'ERROR') log('error', 'reply failed server-side');
       setStatus('listening', 'live');
+      break;
+
+    case 'turn':
+      renderTurn(msg.turn);
       break;
 
     case 'error':

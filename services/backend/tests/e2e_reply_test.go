@@ -22,6 +22,7 @@ import (
 
 	"github.com/arnav/astra/services/backend/internal/asr"
 	"github.com/arnav/astra/services/backend/internal/endpoint"
+	"github.com/arnav/astra/services/backend/internal/metrics"
 	"github.com/arnav/astra/services/backend/internal/pb"
 	"github.com/arnav/astra/services/backend/internal/server"
 	"github.com/arnav/astra/services/backend/internal/turn"
@@ -122,15 +123,39 @@ func newReplyRig(t *testing.T, llm stubLLM, synth stubTTS) *replyRig {
 	srv := server.New()
 	srv.NewSink = func(streamID string, send server.Sender) server.Sink {
 		var runner *turn.Runner
+		// Mirrors cmd/astra: the recorder wraps the Sender and the callbacks,
+		// so the spans measured here travel the same path they do in the real
+		// binary. The durations are the stubs' own, not a provider's.
+		rec := metrics.New(streamID, false)
+		send = rec.Wrap(send)
 		worker := asr.NewWorker(streamID, stubASR{text: "what is the weather"}, func(tr asr.Transcript) {
 			runner.Start(tr)
 		})
 		m := endpoint.NewMachine(streamID, epCfg, endpoint.ArmOnVad,
-			func(u endpoint.Utterance) { worker.Enqueue(u) },
-			func() { runner.Barge() })
+			func(u endpoint.Utterance) {
+				rec.Utterance(u.StartSeq)
+				worker.Enqueue(u)
+			},
+			func() {
+				rec.Barge()
+				runner.Barge()
+			})
 		runner = turn.NewRunner(streamID, send, llm, synth, replyRate, m.SetSpeaking)
 
-		rig.sink = vad.NewSink(streamID, engine, vadCfg, m.OnVad, m.OnFrame)
+		onVad := func(e vad.Event) {
+			switch e.Type {
+			case vad.EventStart:
+				rec.VadStart(e.Frame)
+			case vad.EventEnd:
+				rec.VadEnd(e.Frame)
+			}
+			m.OnVad(e)
+		}
+		onFrame := func(seq uint64, pcm []byte) {
+			rec.Frame(seq)
+			m.OnFrame(seq, pcm)
+		}
+		rig.sink = vad.NewSink(streamID, engine, vadCfg, onVad, onFrame)
 		return rig.sink
 	}
 
@@ -235,6 +260,16 @@ func TestEndToEndSpokenReply(t *testing.T) {
 
 	var gotTranscript, gotDelta, gotAudio bool
 	var end *pb.ReplyEnd
+	var firstAudioAt, turnAt = -1, -1
+	var latency *pb.Turn
+	for i, m := range msgs {
+		if m.GetReplyAudio() != nil && firstAudioAt < 0 {
+			firstAudioAt = i
+		}
+		if t := m.GetTurn(); t != nil && latency == nil {
+			latency, turnAt = t, i
+		}
+	}
 	for _, m := range msgs {
 		switch {
 		case m.GetTranscript() != nil:
@@ -262,6 +297,47 @@ func TestEndToEndSpokenReply(t *testing.T) {
 	}
 	if end.Reason != pb.ReplyEnd_DONE {
 		t.Errorf("reason = %v, want DONE", end.Reason)
+	}
+
+	// The latency waterfall rides the same socket, and lands with the first
+	// audio rather than at the end of the reply.
+	if latency == nil {
+		t.Fatal("no Turn message: the latency chain was never reported")
+	}
+	if turnAt != firstAudioAt+1 {
+		t.Errorf("Turn at index %d, want %d (immediately after the first ReplyAudio)", turnAt, firstAudioAt+1)
+	}
+	if latency.Chain != "turn" {
+		t.Errorf("chain = %q, want turn", latency.Chain)
+	}
+	assertChain(t, latency, []string{"vad_detect", "user_speech", "endpoint_tail", "asr", "llm_ttft", "tts_ttfb"})
+	// Only structure is asserted, never durations: this rig pushes the clip
+	// through the socket as fast as it is accepted, so the frame-counted waits
+	// (hangover, grace) pass in a few ms of wall clock. Against a real
+	// microphone the same spans are ~1 s. That gap is the point of measuring
+	// arrival time rather than frame counts.
+}
+
+// assertChain checks the waterfall is complete, ordered and non-negative —
+// everything that must hold whatever the wall clock did during the test.
+func assertChain(t *testing.T, turn *pb.Turn, want []string) {
+	t.Helper()
+	var got []string
+	var prev uint32
+	for _, s := range turn.GetSpans() {
+		got = append(got, s.GetName())
+		if s.GetStartMs() < prev {
+			t.Errorf("span %s starts at %d ms, before the previous span at %d ms", s.GetName(), s.GetStartMs(), prev)
+		}
+		prev = s.GetStartMs()
+	}
+	if len(got) != len(want) {
+		t.Fatalf("spans = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("spans = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -297,4 +373,27 @@ func TestEndToEndBargeIn(t *testing.T) {
 		t.Errorf("cancel is for utterance %d but the turn that ended was %d",
 			cancelled.UtteranceId, last.UtteranceId)
 	}
+
+	// The barge-in chain is reported as its own waterfall, attached to the turn
+	// it interrupted so a client can draw it under the bars already on screen.
+	// The barge waterfall is injected right behind the Cancel it measures, so
+	// it lands in the batch read after it.
+	var barge *pb.Turn
+	for _, m := range append(msgs, end...) {
+		if turn := m.GetTurn(); turn != nil && turn.Chain == "barge" {
+			barge = turn
+		}
+	}
+	if barge == nil {
+		t.Fatal("no barge chain reported")
+	}
+	if barge.UtteranceId != cancelled.UtteranceId {
+		t.Errorf("barge chain is for utterance %d, want the cancelled turn %d",
+			barge.UtteranceId, cancelled.UtteranceId)
+	}
+	// Structure only, for the same reason as the turn chain: the interrupting
+	// speech is pushed through the socket in a burst, so the 6-frame
+	// confirmation hold that costs 120 ms against a live microphone costs
+	// almost no wall clock here.
+	assertChain(t, barge, []string{"barge_detect", "cancel_send"})
 }

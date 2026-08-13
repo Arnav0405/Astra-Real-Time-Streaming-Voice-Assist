@@ -64,6 +64,32 @@
   .line.barge .tag { color: var(--barge); }
   .line.error .tag { color: var(--error); }
   .line.you .tag { color: var(--live); }
+
+  /* Latency waterfall. Bars are plain divs sized in percent — a chart library
+     would be a dependency to draw six rectangles. */
+  .turn { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+  .turn:first-child { padding-top: 0; }
+  .turn:last-child { border-bottom: 0; padding-bottom: 0; }
+  .turn-head {
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: .75rem; color: var(--muted); margin-bottom: .4rem;
+  }
+  .turn-head b { color: var(--text); font-size: .95rem; font-variant-numeric: tabular-nums; }
+  .span { display: flex; align-items: center; gap: .5rem; font-size: .75rem; padding: .09rem 0; }
+  .span .name { width: 7.5rem; flex: none; color: var(--muted); }
+  .span .track { flex: 1; min-width: 0; }
+  .span .fill {
+    height: .62rem; border-radius: 2px; background: var(--speak);
+    min-width: 2px; /* a sub-millisecond span must still be visible */
+  }
+  .span .ms { width: 3.6rem; flex: none; text-align: right; font-variant-numeric: tabular-nums; }
+  /* How long the user talked is drawn for context but is not our latency. */
+  .span.muted .fill { background: var(--line); }
+  .span.muted .ms { color: var(--muted); }
+  .barge-block { margin: .45rem 0 0 .4rem; padding-left: .6rem; border-left: 2px solid var(--barge); }
+  .barge-block .fill { background: var(--barge); }
+  .barge-head { font-size: .72rem; color: var(--barge); margin-bottom: .25rem; }
+  .barge-head span { color: var(--muted); }
 </style>
 </head>
 <body>
@@ -88,6 +114,11 @@
   <section class="panel">
     <h2>Astra</h2>
     <div id="reply"></div>
+  </section>
+
+  <section class="panel">
+    <h2>Latency</h2>
+    <div id="waterfall"></div>
   </section>
 
   <section class="panel">

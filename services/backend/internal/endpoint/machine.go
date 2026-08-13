@@ -11,10 +11,7 @@ import (
 type Mode int
 
 const (
-	// ArmOnVad: no wake word — arm on VAD EventStart (speech onset).
 	ArmOnVad Mode = iota
-	// ArmOnWake: arm on the wake Event; a bare VAD EventStart never arms from
-	// idle (it only reopens during grace).
 	ArmOnWake
 )
 
@@ -22,10 +19,6 @@ const (
 	idle = iota
 	capturing
 	grace
-	// speaking: the assistant is playing audio back. This is the only state a
-	// barge-in can happen in, and the only one where a bare VAD speech_start
-	// arms an utterance even in ArmOnWake mode — interrupting a reply by
-	// saying the wake word again is not how people talk.
 	speaking
 )
 
@@ -58,11 +51,11 @@ type Machine struct {
 
 	state       int
 	buf         []byte
-	frames      int    // frames buffered since arm
-	framesAtEnd int    // frames at EventEnd (speech span); 0 until EventEnd
-	graceCount  int    // silence frames counted since entering grace
-	startSeq    uint64 // seq of first buffered frame
-	lastSeq     uint64 // seq of most recent buffered frame
+	frames      int
+	framesAtEnd int
+	graceCount  int
+	startSeq    uint64
+	lastSeq     uint64
 
 	// Barge-in bookkeeping, live only in the speaking state. The ring keeps
 	// the most recent frames so an interruption arrives with its onset
@@ -72,8 +65,8 @@ type Machine struct {
 	ringSeq     []uint64
 	ringNext    int
 	ringLen     int
-	bargeSpeech bool // VAD currently reports speech during playback
-	bargeCount  int  // consecutive speech frames since it started
+	bargeSpeech bool
+	bargeCount  int
 
 	// speakingReq is written by the reply runner from its own goroutine and
 	// read by the frame goroutine; see SetSpeaking.

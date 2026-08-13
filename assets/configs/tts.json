@@ -1,7 +1,7 @@
 {
   "base_url": "https://api.naga.ac/v1",
-  "model": "tts-1",
-  "voice": "alloy",
+  "model": "eleven-multilingual-v2:free",
+  "voice": "Bella - Professional, Bright, Warm",
   "format": "pcm",
   "sample_rate_hz": 24000
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/arnav/astra/services/backend/internal/asr"
 	"github.com/arnav/astra/services/backend/internal/endpoint"
 	"github.com/arnav/astra/services/backend/internal/llm"
+	"github.com/arnav/astra/services/backend/internal/metrics"
 	"github.com/arnav/astra/services/backend/internal/server"
 	"github.com/arnav/astra/services/backend/internal/tts"
 	"github.com/arnav/astra/services/backend/internal/turn"
@@ -134,7 +135,7 @@ func main() {
 	// Per-stream because the dumper owns its filename counter and the worker
 	// its queue. Under -verbose, wrap it so the utterance end is always logged.
 	// The returned worker is nil when ASR is disabled.
-	makeOnUtterance := func(streamID string, onTranscript func(asr.Transcript)) (func(endpoint.Utterance), *asr.Worker) {
+	makeOnUtterance := func(streamID string, rec *metrics.Recorder, onTranscript func(asr.Transcript)) (func(endpoint.Utterance), *asr.Worker) {
 		var next func(endpoint.Utterance)
 		var worker *asr.Worker
 		if asrClient != nil {
@@ -157,14 +158,22 @@ func main() {
 				}
 			}
 		}
-		if !*verbose {
-			return next, worker
+		// A nil consumer and no tracing means the machine logs the utterance
+		// itself, so keep the nil rather than swallowing that.
+		if next == nil && !*verbose {
+			return nil, worker
 		}
+		inner := next
 		return func(u endpoint.Utterance) {
-			log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
-				streamID, u.FrameCount, u.StartSeq, u.EndSeq)
-			if next != nil {
-				next(u)
+			// Outermost, so the endpoint tail is stamped at the close itself
+			// rather than after the WAV dump or the ASR enqueue.
+			rec.Utterance(u.StartSeq)
+			if *verbose {
+				log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
+					streamID, u.FrameCount, u.StartSeq, u.EndSeq)
+			}
+			if inner != nil {
+				inner(u)
 			}
 		}, worker
 	}
@@ -184,8 +193,12 @@ func main() {
 	// two reference each other by design — the machine cancels the reply on
 	// barge-in, the runner tells the machine when playback starts and stops —
 	// so the machine is built first and the runner reached through a closure.
-	buildTurn := func(streamID string, send server.Sender, mode endpoint.Mode) (*endpoint.Machine, *asr.Worker, *turn.Runner) {
+	buildTurn := func(streamID string, send server.Sender, mode endpoint.Mode, rec *metrics.Recorder) (*endpoint.Machine, *asr.Worker, *turn.Runner) {
 		var runner *turn.Runner
+		// Every outbound message passes the recorder on its way to the socket:
+		// Transcript, the first ReplyDelta and the first ReplyAudio are the
+		// ASR/LLM/TTS boundaries, and Cancel closes the barge-in chain.
+		send = rec.Wrap(send)
 
 		var onTranscript func(asr.Transcript)
 		if replyEnabled {
@@ -196,9 +209,10 @@ func main() {
 				runner.Start(t)
 			}
 		}
-		onUtt, worker := makeOnUtterance(streamID, onTranscript)
+		onUtt, worker := makeOnUtterance(streamID, rec, onTranscript)
 
 		m := endpoint.NewMachine(streamID, epCfg, mode, onUtt, func() {
+			rec.Barge()
 			if runner == nil {
 				return
 			}
@@ -211,6 +225,35 @@ func main() {
 			runner = turn.NewRunner(streamID, send, llmClient, ttsClient, ttsClient.SampleRateHz(), m.SetSpeaking)
 		}
 		return m, worker, runner
+	}
+
+	// Phase 8 timing taps. Same shape as the -verbose tracing below and applied
+	// outside it, so a boundary is stamped before anything else reacts to it.
+	// The frame indices these carry are retroactive — the VAD reports the frame
+	// speech actually began on, not the one it worked that out on — so the
+	// recorder resolves them through its own ring of frame arrival times.
+	recVad := func(rec *metrics.Recorder, next func(vad.Event)) func(vad.Event) {
+		return func(e vad.Event) {
+			switch e.Type {
+			case vad.EventStart:
+				rec.VadStart(e.Frame)
+			case vad.EventEnd:
+				rec.VadEnd(e.Frame)
+			}
+			next(e)
+		}
+	}
+	recWake := func(rec *metrics.Recorder, next func(wakeword.Event)) func(wakeword.Event) {
+		return func(e wakeword.Event) {
+			rec.Arm(e.Frame)
+			next(e)
+		}
+	}
+	recFrame := func(rec *metrics.Recorder, next func(uint64, []byte)) func(uint64, []byte) {
+		return func(seq uint64, pcm []byte) {
+			rec.Frame(seq)
+			next(seq, pcm)
+		}
 	}
 
 	// Under -verbose, tee the VAD/wake events to the log before the endpoint
@@ -242,8 +285,10 @@ func main() {
 	srv := server.New()
 	if *wwModel == "" {
 		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
-			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnVad)
-			return withDrain(vad.NewSink(streamID, engine, cfg, traceVad(streamID, m.OnVad), m.OnFrame), worker, runner)
+			rec := metrics.New(streamID, false)
+			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnVad, rec)
+			return withDrain(vad.NewSink(streamID, engine, cfg,
+				recVad(rec, traceVad(streamID, m.OnVad)), recFrame(rec, m.OnFrame)), worker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
@@ -263,9 +308,12 @@ func main() {
 		}
 		defer wwEngine.Close()
 		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
-			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnWake)
+			rec := metrics.New(streamID, true)
+			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnWake, rec)
 			return withDrain(wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
-				traceVad(streamID, m.OnVad), traceWake(streamID, m.OnWake), m.OnFrame), worker, runner)
+				recVad(rec, traceVad(streamID, m.OnVad)),
+				recWake(rec, traceWake(streamID, m.OnWake)),
+				recFrame(rec, m.OnFrame)), worker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word: %s)", *addr, *vadModel, *wwModel)
 	}
