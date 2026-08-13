@@ -1,5 +1,5 @@
 {
-  "grace_frames": 15,
+  "grace_frames": 6,
   "min_utterance_frames": 15,
   "max_utterance_frames": 1500,
   "barge_in_frames": 6

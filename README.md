@@ -64,7 +64,7 @@ Method: the recorded utterance replayed through the real pipeline at realtime pa
 | `tts_ttfb` | first token → first audio byte written | 1808 ms | 2043 ms |
 | **time to first audio** | **`endpoint_tail + asr + llm_ttft + tts_ttfb`** | **5046 ms** | **6527 ms** |
 
-The headline deliberately excludes `user_speech` (how long the tester talked is not latency) and `vad_detect` (reported separately as the "does it hear me" number), and deliberately *includes* `endpoint_tail`, because that second is ours: it is the VAD's 680 ms hangover plus a 300 ms grace window, both frame-counted policy in `assets/configs/endpoint.json`.
+The headline deliberately excludes `user_speech` (how long the tester talked is not latency) and `vad_detect` (reported separately as the "does it hear me" number), and deliberately *includes* `endpoint_tail`, because that second is ours: it is the VAD's 680 ms hangover plus a 120 ms grace window, both frame-counted policy in `assets/configs/endpoint.json`. (The table above was measured at a 300 ms grace; the hangover dominates either way.)
 
 **Barge-in — the sharp one.** 10 interruptions, same replay method. This chain is pure local computation (no provider is involved between the user's onset and the `Cancel`), so it was measured against a local stub reply, which changes nothing about it:
 
