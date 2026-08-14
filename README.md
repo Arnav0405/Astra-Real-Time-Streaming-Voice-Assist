@@ -8,7 +8,7 @@ Astra handles everything between a live microphone and an LLM: streaming audio i
 
 ## Where it stands today
 
-I set out to build the hard, unglamorous part of a voice assistant — the front-end that decides *when someone is talking, whether they meant to, and when they're done* — and to do it as a real streaming system, not a demo that buffers a whole clip and calls a cloud API. Nine phases in, the loop runs end to end — from a real microphone to a spoken answer you can interrupt mid-sentence, measured at every seam and packaged so it runs with one command:
+The hard part of a voice assistant: deciding *when someone is talking, whether they meant to, and when they're done* — as a real streaming system, not a buffer-then-call-the-cloud demo. Nine phases in, the loop runs end to end, mic to spoken answer you can interrupt mid-sentence, measured at every seam, one command to run:
 
 ```
 Microphone (browser or Python client)
@@ -33,27 +33,27 @@ Client: plays the reply, flushes it the instant you interrupt
          └── ✅ every stage above is timed and streamed back as a waterfall
 ```
 
-And it isn't hand-waved — every model boundary is **golden-tested for Python↔Go parity**, down to per-frame probabilities within `1e-4`.
+Every model boundary is **golden-tested for Python↔Go parity**, per-frame probabilities within `1e-4`.
 
 ### What's live
 
-- **Streaming WebSocket ingest** — `StreamStart` → validated 20 ms Frames → `StreamStop`. Any protocol violation returns a typed `Error` and closes the connection. Frames drain into a per-session `Sink` — the seam everything downstream plugs into.
-- **Custom VAD, trained from scratch** — 40-mel → 2×Conv1d → GRU(64) → sigmoid, one frame per step, exported to ONNX (opset 17) with the mel frontend baked into the graph (PCM in, prob out — no STFT op at runtime). Trained on LibriParty + CHiME-Home negatives with SNR augmentation. On held-out test: **AUC 0.982 · F1 0.958 · 96.4% segment recall · 11.6 false alarms/hour · p90 onset latency 320 ms**. Post-processing is a hysteresis + debounce machine, grid-searched over 480 configs under a ≥0.95-recall constraint.
-- **Custom wake word "Astraa"** — TTS + real-recording positives, ACAV/adversarial negatives, an OpenWakeWord head trained over frozen frontends, all merged into a single `ww_v1.onnx`. On the frozen real-recording test sessions it clears every gate: **recall 0.96 quiet / 0.90 noisy, ~0.9 estimated production false-accepts/hour, median latency 0 ms.** In Go it runs VAD-gated with a 1 s ring-buffer preroll backfill so the trigger never misses the onset.
-- **Utterance endpointing** — a per-stream state machine that arms on the wake word (or on speech onset in VAD-only mode), captures PCM, and closes the turn on VAD silence plus a short grace window. A mid-sentence pause shorter than grace doesn't cut the speaker off; a cough or false fire shorter than `min_utterance_frames` is dropped silently. All timing is frame-counted (20 ms/frame), no wall-clock.
-- **Whisper transcription** — closed utterances post to a hosted Whisper API (NagaAI, OpenAI-compatible) as in-memory WAVs. A per-stream worker transcribes serially and in order without ever blocking the frame path; failures retry once then drop (the stream lives); stream close drains the queue so the last words still transcribe. The transcript feeds an `onTranscript` seam, which the reply runner plugs into. `-no-asr` runs the front-end offline.
-- **Spoken replies, streamed** — a closed transcript starts a turn: the LLM streams tokens, a chunker splits them into sentences at terminal punctuation (requiring a following space, so `3.14` stays intact), and each sentence is synthesized while the *next* is still being generated. Audio is paced to at most 300 ms ahead of realtime — not for its own sake, but because a barge-in `Cancel` queued behind several seconds of buffered audio would feel laggy no matter how fast detection was.
-- **Barge-in** — the microphone stays live while the assistant talks, so the VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms by default) cancels the turn: the in-flight LLM and TTS HTTP requests are aborted at the body read, a `Cancel` tells the client to flush what it has buffered, and the utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. A cough or a burst of residual echo, being shorter than the threshold, is ignored.
-- **Browser client** — `clients/web` is a dependency-free page (no npm, no build step) served at `/app/`. It exists for one reason: barge-in needs the mic live while the speaker plays, and `getUserMedia({echoCancellation:true})` is WebRTC's AEC3 for free rather than a DSP module to write and tune. Capture runs in a 16 kHz `AudioContext`, so the browser resamples natively and the worklet emits server-ready frames; playback schedules `AudioBufferSourceNode`s in sequence, which makes the flush exactly "stop every scheduled source".
-- **Latency, measured** — every stage boundary is stamped server-side and streamed back as a `Turn` message, which the browser draws as a waterfall the moment the reply starts speaking, plus one JSON line per chain for offline aggregation (`scripts/latency.py`). The instrumentation is a tap, not a rewrite: `internal/metrics` is driven entirely from wrappers in `cmd/astra` and no stage package gained a parameter, a field, or an import. Retroactive event indices (the VAD reports the frame speech *began* on, not the one it worked that out on) resolve through a ring of frame arrival times, so the detectors' own lag is charged honestly instead of vanishing. Numbers below.
-- **One command to run it** — `docker compose up`, then open the page and talk. One image holds the binary, ONNX Runtime (pinned to the version the parity fixtures were verified against), the models and the browser client, and builds natively on amd64 and arm64. It cost zero Go changes: the container's paths live in its `ENTRYPOINT`, so `go run ./cmd/astra` from source is unchanged. The API key is passed in, never baked; missing, the server says so and exits.
-- **Manual test loop** — a real mic client (`clients/mic`) streams your voice to the server; a `-verbose` trace prints the VAD/wake/utterance boundaries as they fire, transcripts land in the server log, and `-endpoint-wav-dir` dumps one `.wav` per captured utterance for playback. See [clients/mic/README.md](clients/mic/README.md).
+- **Streaming WebSocket ingest** — `StreamStart` → validated 20 ms Frames → `StreamStop`. Protocol violation → typed `Error`, connection closed. Frames drain into a per-session `Sink`, the seam everything downstream plugs into.
+- **Custom VAD, trained from scratch** — 40-mel → 2×Conv1d → GRU(64) → sigmoid, one frame per step, ONNX (opset 17), mel frontend baked into the graph (PCM in, prob out, no STFT at runtime). Trained on LibriParty + CHiME-Home negatives, SNR augmentation. Held-out test: **AUC 0.982 · F1 0.958 · 96.4% segment recall · 11.6 false alarms/hour · p90 onset latency 320 ms**. Post-processing: hysteresis + debounce, grid-searched over 480 configs under ≥0.95-recall constraint.
+- **Custom wake word "Astraa"** — TTS + real-recording positives, ACAV/adversarial negatives, OpenWakeWord head over frozen frontends, merged into `ww_v1.onnx`. Frozen real-recording test: **recall 0.96 quiet / 0.90 noisy, ~0.9 est. production false-accepts/hour, median latency 0 ms.** VAD-gated in Go with 1 s ring-buffer preroll backfill so the trigger never misses onset.
+- **Utterance endpointing** — per-stream state machine: arms on wake word (or speech onset in VAD-only mode), captures PCM, closes on VAD silence + grace window. Pause shorter than grace doesn't cut the speaker off; false fire shorter than `min_utterance_frames` drops silently. Frame-counted (20 ms/frame), no wall-clock.
+- **Whisper transcription** — closed utterances post to a hosted Whisper API (NagaAI, OpenAI-compatible) as in-memory WAVs. Per-stream worker transcribes serially, in order, never blocks the frame path; failures retry once then drop; stream close drains the queue. Feeds `onTranscript` → reply runner. `-no-asr` runs offline.
+- **Spoken replies, streamed** — closed transcript starts a turn: LLM streams tokens, chunker splits into sentences at terminal punctuation (requires trailing space, so `3.14` stays intact), each sentence synthesized while the next generates. Audio paced ≤300 ms ahead of realtime, so a barge-in `Cancel` isn't stuck behind seconds of buffered audio.
+- **Barge-in** — mic stays live during playback, VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms default) cancels the turn: in-flight LLM/TTS requests aborted at the body read, `Cancel` tells the client to flush, utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. Cough or echo burst shorter than threshold: ignored.
+- **Browser client** — `clients/web`, dependency-free, no build step, served at `/app/`. Exists because barge-in needs the mic live while the speaker plays, and `getUserMedia({echoCancellation:true})` gives WebRTC's AEC3 for free. Capture runs in a 16 kHz `AudioContext` (native resample, server-ready frames from the worklet); playback schedules `AudioBufferSourceNode`s in sequence, so flush = stop every scheduled source.
+- **Latency, measured** — every stage boundary stamped server-side, streamed back as a `Turn` message (browser draws it as a waterfall), plus one JSON line per chain for offline aggregation (`scripts/latency.py`). Instrumentation is a tap: `internal/metrics` runs entirely from wrappers in `cmd/astra`, no stage package touched. Retroactive event indices (VAD reports the frame speech *began* on, not the one it worked that out on) resolve through a ring of frame arrival times, so detector lag gets charged honestly. Numbers below.
+- **One command to run it** — `docker compose up`, open the page, talk. One image: binary, ONNX Runtime (pinned to the parity-verified version), models, browser client; builds natively on amd64/arm64. Zero Go changes — container paths live in `ENTRYPOINT`, `go run ./cmd/astra` from source unchanged. API key passed in, never baked; missing key, server says so and exits.
+- **Manual test loop** — `clients/mic` streams your voice to the server; `-verbose` prints VAD/wake/utterance boundaries as they fire, transcripts land in the server log, `-endpoint-wav-dir` dumps one `.wav` per captured utterance. See [clients/mic/README.md](clients/mic/README.md).
 
 ### Latency, measured end to end
 
-Every boundary below is stamped **server-side**, so both chains end at a socket write. What the browser does after that — decode, schedule, play — runs on a different clock, and synchronising two clocks to quote a number the server cannot observe would be worse than saying this plainly: **client playback latency is not included.**
+Every boundary stamped **server-side**; both chains end at a socket write. **Client playback latency is not included** — decode/schedule/play runs on a different clock the server can't observe.
 
-Method: the recorded utterance replayed through the real pipeline at realtime pacing (20 ms frames, as a microphone delivers them), VAD-only mode, against the live NagaAI free tier — `whisper-large-v3:free`, `llama-3.3-70b-instruct:free`, `eleven-multilingual-v2:free`. 14 turns. Because it is one clip replayed, `user_speech` and `endpoint_tail` are near-constant by construction; the three network spans are not.
+Method: recorded utterance replayed through the real pipeline at realtime pacing (20 ms frames), VAD-only mode, against the live NagaAI free tier — `whisper-large-v3:free`, `llama-3.3-70b-instruct:free`, `eleven-multilingual-v2:free`. 14 turns. One clip replayed → `user_speech`/`endpoint_tail` near-constant by construction; the three network spans are not.
 
 | span | what it covers | p50 | p90 |
 | --- | --- | ---: | ---: |
@@ -65,9 +65,9 @@ Method: the recorded utterance replayed through the real pipeline at realtime pa
 | `tts_ttfb` | first token → first audio byte written | 1808 ms | 2043 ms |
 | **time to first audio** | **`endpoint_tail + asr + llm_ttft + tts_ttfb`** | **5046 ms** | **6527 ms** |
 
-The headline deliberately excludes `user_speech` (how long the tester talked is not latency) and `vad_detect` (reported separately as the "does it hear me" number), and deliberately *includes* `endpoint_tail`, because that second is ours: it is the VAD's 680 ms hangover plus a 120 ms grace window, both frame-counted policy in `assets/configs/endpoint.json`. (The table above was measured at a 300 ms grace; the hangover dominates either way.)
+Headline excludes `user_speech` (not latency) and `vad_detect` (reported separately), *includes* `endpoint_tail` — that second is ours: VAD's 680 ms hangover + 120 ms grace, frame-counted policy in `assets/configs/endpoint.json`. (Table measured at 300 ms grace; hangover dominates either way.)
 
-**Barge-in — the sharp one.** 10 interruptions, same replay method. This chain is pure local computation (no provider is involved between the user's onset and the `Cancel`), so it was measured against a local stub reply, which changes nothing about it:
+**Barge-in — the sharp one.** 10 interruptions, same replay method. Pure local computation (no provider between user onset and `Cancel`), measured against a local stub reply:
 
 | span | what it covers | p50 | p90 |
 | --- | --- | ---: | ---: |
@@ -75,9 +75,9 @@ The headline deliberately excludes `user_speech` (how long the tester talked is 
 | `cancel_send` | confirmed → `Cancel` written to the socket | 0 ms | 0 ms |
 | **onset to cancel** | | **159 ms** | **160 ms** |
 
-That 159 ms is almost entirely deliberate: the VAD needs 4 frames of speech to declare onset and the endpoint machine holds for `barge_in_frames` (6) before believing it, so a cough or a burst of residual echo cannot cut the assistant off. The server's own work in that chain rounds to zero. It is measured from the frame the user *actually started speaking on*, recovered through the arrival ring — stamping at confirmation time instead would have reported this as ~0 ms and meant nothing.
+159 ms is mostly deliberate: VAD needs 4 frames to declare onset, endpoint machine holds `barge_in_frames` (6) before believing it — so a cough or echo burst can't cut the assistant off. Server's own work in that chain rounds to zero. Measured from the frame the user *actually started speaking on*, recovered through the arrival ring.
 
-**The verdict: `tts_ttfb` dominates**, which is what makes local Piper the next piece of work rather than a guess — see [What's next](#whats-next). `asr` is second, and its escape hatch is free when wanted: pointing `asr.json`'s `base_url` at a local `faster-whisper-server` needs zero Go changes.
+**Verdict: `tts_ttfb` dominates** — makes local Piper the next piece of work, not a guess — see [What's next](#whats-next). `asr` is second; escape hatch is free: point `asr.json`'s `base_url` at a local `faster-whisper-server`, zero Go changes.
 
 Reproduce: run the server with stderr redirected to a file, talk to it, then `python3 scripts/latency.py runs/latency.jsonl`. From the container, the spans are on stdout — `docker compose logs --no-log-prefix astra > runs/latency.jsonl` (the prefix Compose adds by default is not JSON, and the script parses lines).
 
@@ -91,9 +91,9 @@ Reproduce: run the server with stderr redirected to a file, talk to it, then `py
 
 ## What's next
 
-The loop closes, it is measured, and it is packaged. One item stays open, and the measurement is what names it:
+Loop closes, measured, packaged. One item open, and the measurement is what names it:
 
-- **🔜 Phase 9 — Local Piper TTS.** The waterfall says TTS time-to-first-byte is the top span, so that is the one to fix: Piper runs as ONNX, on the same Python↔Go boundary every other model in this repo already crosses, with no network hop and no free-tier ceiling. The cost is espeak-ng phonemization — which is exactly the work the measurement was there to justify.
+- **🔜 Phase 9 — Local Piper TTS.** Waterfall says TTS time-to-first-byte is the top span. Piper runs as ONNX, same Python↔Go boundary every other model here crosses, no network hop, no free-tier ceiling. Cost: espeak-ng phonemization.
 
 Full phase detail lives in [docs/development-roadmap.md](docs/development-roadmap.md).
 
