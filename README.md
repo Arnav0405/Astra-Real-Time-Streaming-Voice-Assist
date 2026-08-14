@@ -198,13 +198,6 @@ The Python mic client still works for scripted testing and keeps the WebSocket r
 services/ml/.venv/bin/python clients/mic/mic_client.py
 ```
 
-## Development philosophy
-
-- **Streaming-first.** Every pipeline stage consumes and produces streams; nothing buffers a whole utterance unless the stage semantically requires it.
-- **Hard service boundary.** Go never trains; Python never serves. ONNX artifacts are the only thing that crosses.
-- **Latency is the feature.** Design decisions are judged by their effect on time-to-first-token.
-- **Boring infrastructure.** Standard tools, explicit contracts, documented decisions.
-
 ## License
 
 [MIT](LICENSE)
