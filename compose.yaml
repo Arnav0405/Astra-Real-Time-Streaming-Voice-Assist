@@ -1,0 +1,15 @@
+services:
+  astra:
+    image: astra
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      # Interpolated from the repo-root .env (Compose reads it automatically),
+      # or from an exported shell variable. The key never enters the image.
+      # Missing: the server exits at startup saying so — never a silent
+      # fallback. For the keyless front-end demo:
+      #   docker compose run --rm --service-ports astra -no-asr -verbose
+      NAGA_API_KEY: "${NAGA_API_KEY:-}"

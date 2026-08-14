@@ -4,7 +4,7 @@ ML_DIR := services/ml
 # Guard Go targets until first .go file exists — go tools error on empty modules
 GO_FILES := $(shell find $(GO_DIR) -name '*.go' 2>/dev/null | head -1)
 
-.PHONY: format lint test proto clean
+.PHONY: format lint test proto clean docker up
 
 format:
 ifneq ($(GO_FILES),)
@@ -31,6 +31,12 @@ proto:
 		--go_out=$(GO_DIR)/internal/pb \
 		--go_opt=module=github.com/arnav/astra/services/backend/internal/pb \
 		proto/astra/v1/astra.proto
+
+docker:
+	docker build -f docker/Dockerfile -t astra .
+
+up:
+	docker compose up --build
 
 clean:
 	rm -rf $(GO_DIR)/bin $(ML_DIR)/.pytest_cache $(ML_DIR)/.ruff_cache

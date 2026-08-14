@@ -8,7 +8,7 @@ Astra handles everything between a live microphone and an LLM: streaming audio i
 
 ## Where it stands today
 
-I set out to build the hard, unglamorous part of a voice assistant — the front-end that decides *when someone is talking, whether they meant to, and when they're done* — and to do it as a real streaming system, not a demo that buffers a whole clip and calls a cloud API. Seven phases in, the loop runs end to end — from a real microphone to a spoken answer you can interrupt mid-sentence:
+I set out to build the hard, unglamorous part of a voice assistant — the front-end that decides *when someone is talking, whether they meant to, and when they're done* — and to do it as a real streaming system, not a demo that buffers a whole clip and calls a cloud API. Nine phases in, the loop runs end to end — from a real microphone to a spoken answer you can interrupt mid-sentence, measured at every seam and packaged so it runs with one command:
 
 ```
 Microphone (browser or Python client)
@@ -46,6 +46,7 @@ And it isn't hand-waved — every model boundary is **golden-tested for Python�
 - **Barge-in** — the microphone stays live while the assistant talks, so the VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms by default) cancels the turn: the in-flight LLM and TTS HTTP requests are aborted at the body read, a `Cancel` tells the client to flush what it has buffered, and the utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. A cough or a burst of residual echo, being shorter than the threshold, is ignored.
 - **Browser client** — `clients/web` is a dependency-free page (no npm, no build step) served at `/app/`. It exists for one reason: barge-in needs the mic live while the speaker plays, and `getUserMedia({echoCancellation:true})` is WebRTC's AEC3 for free rather than a DSP module to write and tune. Capture runs in a 16 kHz `AudioContext`, so the browser resamples natively and the worklet emits server-ready frames; playback schedules `AudioBufferSourceNode`s in sequence, which makes the flush exactly "stop every scheduled source".
 - **Latency, measured** — every stage boundary is stamped server-side and streamed back as a `Turn` message, which the browser draws as a waterfall the moment the reply starts speaking, plus one JSON line per chain for offline aggregation (`scripts/latency.py`). The instrumentation is a tap, not a rewrite: `internal/metrics` is driven entirely from wrappers in `cmd/astra` and no stage package gained a parameter, a field, or an import. Retroactive event indices (the VAD reports the frame speech *began* on, not the one it worked that out on) resolve through a ring of frame arrival times, so the detectors' own lag is charged honestly instead of vanishing. Numbers below.
+- **One command to run it** — `docker compose up`, then open the page and talk. One image holds the binary, ONNX Runtime (pinned to the version the parity fixtures were verified against), the models and the browser client, and builds natively on amd64 and arm64. It cost zero Go changes: the container's paths live in its `ENTRYPOINT`, so `go run ./cmd/astra` from source is unchanged. The API key is passed in, never baked; missing, the server says so and exits.
 - **Manual test loop** — a real mic client (`clients/mic`) streams your voice to the server; a `-verbose` trace prints the VAD/wake/utterance boundaries as they fire, transcripts land in the server log, and `-endpoint-wav-dir` dumps one `.wav` per captured utterance for playback. See [clients/mic/README.md](clients/mic/README.md).
 
 ### Latency, measured end to end
@@ -78,7 +79,7 @@ That 159 ms is almost entirely deliberate: the VAD needs 4 frames of speech to d
 
 **The verdict: `tts_ttfb` dominates**, which is what makes local Piper the next piece of work rather than a guess — see [What's next](#whats-next). `asr` is second, and its escape hatch is free when wanted: pointing `asr.json`'s `base_url` at a local `faster-whisper-server` needs zero Go changes.
 
-Reproduce: run the server with stderr redirected to a file, talk to it, then `python3 scripts/latency.py runs/latency.jsonl`.
+Reproduce: run the server with stderr redirected to a file, talk to it, then `python3 scripts/latency.py runs/latency.jsonl`. From the container, the spans are on stdout — `docker compose logs --no-log-prefix astra > runs/latency.jsonl` (the prefix Compose adds by default is not JSON, and the script parses lines).
 
 ### The discipline behind it
 
@@ -90,10 +91,9 @@ Reproduce: run the server with stderr redirected to a file, talk to it, then `py
 
 ## What's next
 
-The loop closes, and it is now measured. What is left is acting on the measurement.
+The loop closes, it is measured, and it is packaged. One item stays open, and the measurement is what names it:
 
 - **🔜 Phase 9 — Local Piper TTS.** The waterfall says TTS time-to-first-byte is the top span, so that is the one to fix: Piper runs as ONNX, on the same Python↔Go boundary every other model in this repo already crosses, with no network hop and no free-tier ceiling. The cost is espeak-ng phonemization — which is exactly the work the measurement was there to justify.
-- **🔜 Phase 10 — Packaging.** Docker, deployment, the boring-on-purpose infrastructure.
 
 Full phase detail lives in [docs/development-roadmap.md](docs/development-roadmap.md).
 
@@ -140,6 +140,7 @@ docker/             Container definitions
 | Echo cancellation | The browser's WebRTC AEC3, via `getUserMedia` |
 | Client transport | WebSocket (protobuf-framed PCM) |
 | Python tooling | uv, Ruff, Pytest |
+| Packaging | Docker (multi-stage, `debian:bookworm-slim`, amd64 + arm64) |
 
 ## Development
 
@@ -149,7 +150,31 @@ make lint     # lint Go + Python
 make test     # run all test suites
 make proto    # generate code from protobuf schemas
 make clean    # remove build artifacts
+make docker   # build the container image
+make up       # docker compose up --build
 ```
+
+### Run it — Docker
+
+Nothing to install but Docker. Put `NAGA_API_KEY` in a repo-root `.env` (Compose reads it automatically; the key never enters the image), then:
+
+```sh
+docker compose up
+```
+
+Open **<http://localhost:8080/app/>**, click Start, say "Astraa", ask something — and talk over the answer to interrupt it. Use **speakers, not headphones**: the echo canceller is the thing being demonstrated.
+
+The image carries the Go binary, ONNX Runtime 1.29.0 (pinned to the version the parity fixtures were verified against), the exported models and the browser client; it builds natively on both amd64 and arm64. Without a key, the server tells you so and exits — for the offline front-end (VAD, wake word, endpointing, no network at all):
+
+```sh
+docker compose run --rm --service-ports astra -no-asr -verbose
+```
+
+Any flag appends the same way, because the paths live in the image's `ENTRYPOINT` and the command is empty.
+
+> The microphone stays in the browser — the container only ever sees WebSocket frames, so there is no audio device to pass through. `http://localhost` is a secure context, so `getUserMedia` works over plain HTTP. Running the container on *another* machine is the only case that needs more: reach it as `ssh -L 8080:localhost:8080 user@host` and the URL stays `localhost`, or put it behind a TLS proxy.
+
+### Run it — from source
 
 Running the pipeline against a live mic (needs the ONNX Runtime shared lib — `brew install onnxruntime`):
 
