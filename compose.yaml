@@ -13,3 +13,13 @@ services:
       # fallback. For the keyless front-end demo:
       #   docker compose run --rm --service-ports astra -no-asr -verbose
       NAGA_API_KEY: "${NAGA_API_KEY:-}"
+    depends_on:
+      - whisper
+
+  whisper:
+    build:
+      context: .
+      dockerfile: services/whisper/Dockerfile
+    ports:
+      - "8000:8000"
+    restart: unless-stopped

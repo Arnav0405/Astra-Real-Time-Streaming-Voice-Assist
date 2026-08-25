@@ -20,13 +20,7 @@ import (
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
 
-// drainSink lets the per-stream workers finish after the stream's frames are
-// drained. It runs in the background so socket teardown never waits on a slow
-// transcription HTTP call.
-//
-// The reply runner is closed first: the client is already gone, so a reply
-// still in flight is audio nobody will hear. Draining ASR afterwards may hand
-// it one last transcript, which a closed runner ignores.
+.
 type drainSink struct {
 	server.Sink
 	worker *asr.Worker
@@ -82,8 +76,6 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// ASR is mandatory unless explicitly disabled: a missing key must be a
-	// choice you typed (-no-asr), never a silent fallback.
 	var asrClient *asr.Client
 	if *noASR {
 		log.Print("asr disabled (-no-asr): utterances will not be transcribed")
@@ -139,8 +131,6 @@ func main() {
 		var next func(endpoint.Utterance)
 		var worker *asr.Worker
 		if asrClient != nil {
-			// A nil onTranscript logs the transcript server-side; the reply
-			// runner is what plugs in here once replies are enabled.
 			worker = asr.NewWorker(streamID, asrClient, onTranscript)
 			next = func(u endpoint.Utterance) { worker.Enqueue(u) }
 		}
@@ -178,8 +168,6 @@ func main() {
 		}, worker
 	}
 
-	// withDrain wraps a sink so the stream's workers unwind after the frame
-	// channel closes (Q10: last words still transcribe).
 	withDrain := func(s server.Sink, w *asr.Worker, r *turn.Runner) server.Sink {
 		if w == nil && r == nil {
 			return s

@@ -42,3 +42,5 @@ services/ml/**/*.onnx
 # Claude Stuff
 CONTEXT.md
 docs/
+.ocx
+.opencode

@@ -1,5 +1,5 @@
 {
-  "base_url": "https://api.naga.ac/v1",
-  "model": "whisper-large-v3:free",
+  "base_url": "http://localhost:8000",
+  "model": "small",
   "language": "en"
 }
