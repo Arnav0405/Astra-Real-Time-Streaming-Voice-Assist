@@ -20,7 +20,6 @@ import (
 	"github.com/arnav/astra/services/backend/internal/wakeword"
 )
 
-.
 type drainSink struct {
 	server.Sink
 	worker *asr.Worker
