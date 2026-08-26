@@ -166,10 +166,19 @@ function renderTurn(t) {
   const block = document.createElement('div');
   block.className = 'turn';
 
+  // A failed turn has no tts_ttfb span — the chain stops where it died — so
+  // "to first audio" would be a lie. The speech duration is shown either way:
+  // how long the user talked is context, not latency.
+  const speech = spans.find((s) => s.name === 'user_speech');
+  const failed = !spans.some((s) => s.name === 'tts_ttfb');
   const head = document.createElement('div');
   head.className = 'turn-head';
-  head.innerHTML = '<span>turn ' + uid + '</span><span><b>' +
-    (t.headlineMs || 0) + ' ms</b> to first audio</span>';
+  head.innerHTML = '<span>turn ' + uid + '</span><span>' +
+    (speech ? '<b>' + speech.durMs + ' ms</b> spoken · ' : '') +
+    (failed
+      ? '<em class="failed">failed — no reply</em>'
+      : '<b>' + (t.headlineMs || 0) + ' ms</b> to first audio') +
+    '</span>';
   block.append(head, ...spans.map((s) =>
     bar(s.name, s.startMs || 0, s.durMs || 0, total, s.name === 'user_speech')));
 

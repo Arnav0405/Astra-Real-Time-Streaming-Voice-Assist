@@ -61,6 +61,9 @@ func audio(uid uint64) *pb.ServerMessage {
 func cancel(uid uint64) *pb.ServerMessage {
 	return &pb.ServerMessage{Msg: &pb.ServerMessage_Cancel{Cancel: &pb.Cancel{UtteranceId: uid}}}
 }
+func replyEnd(uid uint64, reason pb.ReplyEnd_Reason) *pb.ServerMessage {
+	return &pb.ServerMessage{Msg: &pb.ServerMessage_ReplyEnd{ReplyEnd: &pb.ReplyEnd{UtteranceId: uid, Reason: reason}}}
+}
 
 // runTurn drives one whole wake-mode turn through a recorder. Frames are fed
 // in step with the events, as the sink does: an event's retroactive index
@@ -207,6 +210,69 @@ func TestCancelWithoutBargeEmitsNothing(t *testing.T) {
 
 	if n := len(turns(*got)); n != 1 {
 		t.Fatalf("want only the turn chain, got %d Turns", n)
+	}
+}
+
+// An LLM 5xx kills the turn before any delta or audio, so the success path
+// would never report it. The ReplyEnd{ERROR} must still emit a chain — ending
+// at the last stage that ran — so the waterfall shows how far the turn got
+// and how long transcription took.
+func TestFailedTurnEmitsPartialChain(t *testing.T) {
+	r := New("s1", true)
+	send, got := collect(r)
+	for seq := uint64(0); seq <= 2; seq++ {
+		r.Frame(seq)
+	}
+	r.Arm(2)
+	for seq := uint64(3); seq <= 6; seq++ {
+		r.Frame(seq)
+	}
+	r.VadEnd(6)
+	r.Utterance(300)
+	_ = send(transcript(300))
+	_ = send(replyEnd(300, pb.ReplyEnd_ERROR))
+
+	all := turns(*got)
+	if len(all) != 1 {
+		t.Fatalf("want 1 Turn, got %d", len(all))
+	}
+	want := []string{"wake_detect", "user_speech", "endpoint_tail", "asr"}
+	if !eq(spanNames(all[0]), want) {
+		t.Fatalf("spans = %v, want %v", spanNames(all[0]), want)
+	}
+	if all[0].GetUtteranceId() != 300 || all[0].GetChain() != "turn" {
+		t.Fatalf("uid/chain = %d/%q", all[0].GetUtteranceId(), all[0].GetChain())
+	}
+
+	// A second failure marker must not duplicate the chain.
+	_ = send(replyEnd(300, pb.ReplyEnd_ERROR))
+	if n := len(turns(*got)); n != 1 {
+		t.Fatalf("want still 1 Turn after repeat ReplyEnd, got %d", n)
+	}
+}
+
+// A turn that fails after audio started has already reported its chain; the
+// error end must not emit a second one. Same for barge-ins, whose ReplyEnd
+// carries BARGED_IN rather than ERROR.
+func TestEndedTurnsDoNotReEmit(t *testing.T) {
+	r := New("s1", true)
+	send, got := collect(r)
+	runTurn(r, send, 5)
+	_ = send(replyEnd(5, pb.ReplyEnd_ERROR))
+	if n := len(turns(*got)); n != 1 {
+		t.Fatalf("want only the original chain, got %d", n)
+	}
+
+	send2, got2 := collect(r)
+	runTurn(r, send2, 9)
+	r.Frame(20)
+	r.VadStart(20)
+	r.Barge()
+	_ = send2(cancel(9))
+	_ = send2(replyEnd(9, pb.ReplyEnd_BARGED_IN))
+	chains := turns(*got2)
+	if len(chains) != 2 || chains[0].GetChain() != "turn" || chains[1].GetChain() != "barge" {
+		t.Fatalf("want turn then barge and nothing more, got %v", chains)
 	}
 }
 

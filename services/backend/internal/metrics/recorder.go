@@ -191,6 +191,18 @@ func (r *Recorder) observe(msg *pb.ServerMessage) *pb.ServerMessage {
 		r.ttsFirst = time.Now()
 		r.sentTurn = true
 		return r.turnChain()
+	case *pb.ServerMessage_ReplyEnd:
+		// A turn that dies before its first audio — an LLM 5xx, a TTS connect
+		// failure — would otherwise never be reported at all, yet the timings
+		// up to wherever it died are exactly what diagnosing it needs.
+		// relative() drops the stages that never ran, so the chain simply ends
+		// at the last completed boundary.
+		if m.ReplyEnd.GetReason() != pb.ReplyEnd_ERROR || r.sentTurn ||
+			!r.mine(m.ReplyEnd.GetUtteranceId()) {
+			return nil
+		}
+		r.sentTurn = true // nothing further can complete this chain
+		return r.turnChain()
 	case *pb.ServerMessage_Cancel:
 		if r.bargeConfirm.IsZero() {
 			return nil // cancelled for some reason other than a barge-in
@@ -216,7 +228,8 @@ type span struct {
 }
 
 // turnChain builds the turn waterfall. Spans whose marks are missing are
-// dropped rather than drawn as a bar of made-up length.
+// dropped rather than drawn as a bar of made-up length — which is also how a
+// failed turn is reported: its chain just ends at the last stage that ran.
 func (r *Recorder) turnChain() *pb.ServerMessage {
 	raw := []span{
 		{r.detectLabel, r.armAt, r.armed},
