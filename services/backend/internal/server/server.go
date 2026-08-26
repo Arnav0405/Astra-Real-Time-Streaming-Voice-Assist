@@ -6,6 +6,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/coder/websocket"
 
@@ -37,6 +38,13 @@ func New() *Server {
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Plain HTTP requests landing on this route (Chrome prerenders bare
+	// "http://host/" from history on every reload) would otherwise fail the
+	// upgrade with a logged protocol violation. Send them to the web client.
+	if !strings.Contains(r.Header.Get("Connection"), "Upgrade") {
+		http.Redirect(w, r, "/app/", http.StatusFound)
+		return
+	}
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		log.Printf("ws accept: %v", err)

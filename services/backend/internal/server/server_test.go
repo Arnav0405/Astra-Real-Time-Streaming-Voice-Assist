@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -246,5 +247,35 @@ func TestViolations(t *testing.T) {
 				t.Fatal("expected connection closed after error")
 			}
 		})
+	}
+}
+
+// Plain HTTP on the WS route must redirect to the web client, not fail the
+// upgrade with a logged protocol violation (Chrome prerenders bare "/" from
+// Plain HTTP on the WS route must redirect to the web client, not fail the
+// upgrade with a logged protocol violation (Chrome prerenders bare "/" from
+// history on every reload).
+func TestPlainHTTPRedirectsToApp(t *testing.T) {
+	srv := &Server{NewSink: func(string, Sender) Sink { t.Fatal("sink created for plain HTTP"); return nil }}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL, nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	client := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("do: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusFound {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusFound)
+	}
+	if loc := resp.Header.Get("Location"); loc != "/app/" {
+		t.Fatalf("Location = %q, want /app/", loc)
 	}
 }
