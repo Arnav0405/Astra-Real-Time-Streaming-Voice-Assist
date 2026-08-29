@@ -4,6 +4,7 @@
 *
 
 !services/backend
+!services/whisper
 !assets/models
 !assets/configs
 !clients/web

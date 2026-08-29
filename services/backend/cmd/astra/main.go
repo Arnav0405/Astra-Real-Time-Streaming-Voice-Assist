@@ -57,6 +57,7 @@ func main() {
 	verbose := flag.Bool("verbose", false, "log the per-stream pipeline trace (VAD speech/silence, wake, utterance)")
 	flag.Parse()
 
+	godotenv.Load(*envFile) // load .env early so env vars like ASTRA_ORT_LIB are available
 	if err := vad.Init(*ortLib); err != nil {
 		log.Fatal(err)
 	}
