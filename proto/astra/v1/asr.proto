@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package astra.v1;
+
+option go_package = "github.com/arnav/astra/services/backend/internal/asr/pb";
+
+service ASR {
+  rpc StreamTranscribe(stream TranscribeRequest) returns (stream TranscribeResponse);
+}
+
+message TranscribeRequest {
+  oneof payload {
+    StreamConfig config = 1;
+    AudioChunk chunk = 2;
+  }
+}
+
+message StreamConfig {
+  uint64 utterance_id = 1;
+  uint32 sample_rate_hz = 2;
+  uint32 channels = 3;
+  uint32 bits_per_sample = 4;
+  string model = 5;
+  string language = 6;
+}
+
+message AudioChunk {
+  bytes pcm = 1;
+}
+
+message TranscribeResponse {
+  string text = 1;
+  bool is_final = 2;
+}

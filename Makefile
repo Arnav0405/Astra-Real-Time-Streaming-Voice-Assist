@@ -30,7 +30,8 @@ proto:
 		--proto_path=proto \
 		--go_out=$(GO_DIR)/internal/pb \
 		--go_opt=module=github.com/arnav/astra/services/backend/internal/pb \
-		proto/astra/v1/astra.proto
+		proto/astra/v1/astra.proto \
+		proto/astra/v1/asr.proto
 
 docker:
 	docker build -f docker/Dockerfile -t astra .
