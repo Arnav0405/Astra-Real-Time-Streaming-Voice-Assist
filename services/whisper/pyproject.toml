@@ -8,6 +8,8 @@ dependencies = [
     "anyio>=4.14.2",
     "fastapi>=0.141.1",
     "faster-whisper>=1.2.1",
+    "grpcio>=1.83.1",
+    "grpcio-tools>=1.83.1",
     "python-multipart>=0.0.32",
     "uvicorn[standard]>=0.52.4",
 ]
@@ -15,4 +17,5 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
 ]

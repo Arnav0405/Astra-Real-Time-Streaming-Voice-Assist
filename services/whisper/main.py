@@ -1,10 +1,16 @@
-"""Astra local Whisper service: POST /audio/transcriptions with WAV bytes."""
+"""Astra local Whisper service: gRPC streaming ASR + HTTP health."""
 
 from __future__ import annotations
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+import asyncio
+import logging
 
-from transcriber import transcribe_audio
+from fastapi import FastAPI
+
+from asr_server import serve_grpc
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Local Whisper Service")
 
@@ -14,20 +20,23 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/audio/transcriptions")
-async def transcribe(file: UploadFile = File(...)) -> dict[str, str]:
-    """Accept WAV bytes and return transcription text."""
-    audio_data = await file.read()
-    if not audio_data:
-        raise HTTPException(status_code=400, detail="empty audio upload")
-    try:
-        text = await run_in_threadpool_safe(audio_data)
-    except Exception as exc:  # noqa: BLE001 - surface inference failures as 500
-        raise HTTPException(status_code=500, detail=f"transcription failed: {exc}") from exc
-    return {"text": text}
+_grpc_task: asyncio.Task | None = None
 
 
-async def run_in_threadpool_safe(audio_data: bytes) -> str:
-    import anyio
+@app.on_event("startup")
+async def startup() -> None:
+    global _grpc_task
+    _grpc_task = asyncio.create_task(serve_grpc(50051))
+    logger.info("gRPC server task started")
 
-    return await anyio.to_thread.run_sync(transcribe_audio, audio_data)
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    global _grpc_task
+    if _grpc_task is not None:
+        _grpc_task.cancel()
+        try:
+            await _grpc_task
+        except asyncio.CancelledError:
+            pass
+    logger.info("gRPC server stopped")
