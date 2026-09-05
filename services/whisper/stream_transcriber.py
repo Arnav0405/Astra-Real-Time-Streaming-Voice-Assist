@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import io
 import os
 import threading
 
+import numpy as np
 import ctranslate2
 from faster_whisper import WhisperModel
 
@@ -111,14 +111,18 @@ class StreamingTranscriber:
         return text, True
 
     def _transcribe_chunk(self, pcm: bytes) -> str:
-        """Transcribe a chunk of PCM audio using faster-whisper."""
+        """Transcribe a chunk of PCM audio using faster-whisper.
+
+        Accepts raw s16le PCM bytes and converts them directly to a float32
+        ndarray, which faster-whisper's transcribe() accepts as input
+        without an intermediate WAV/decode step.
+        """
         model = _get_model(self.model_size)
 
-        # Create WAV in memory
-        wav_bytes = self._pcm_to_wav(pcm)
+        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
 
         segments, _info = model.transcribe(
-            io.BytesIO(wav_bytes),
+            audio,
             language=self.language,
             condition_on_previous_text=False,  # Each chunk independent
             word_timestamps=False,
@@ -126,31 +130,4 @@ class StreamingTranscriber:
 
         return " ".join(segment.text.strip() for segment in segments).strip()
 
-    def _pcm_to_wav(self, pcm: bytes) -> bytes:
-        """Wrap raw PCM in a minimal WAV header."""
-        import struct
 
-        sample_rate = 16000
-        channels = 1
-        bits_per_sample = 16
-        byte_rate = sample_rate * channels * bits_per_sample // 8
-        block_align = channels * bits_per_sample // 8
-        data_len = len(pcm)
-
-        wav = bytearray()
-        wav.extend(b"RIFF")
-        wav.extend(struct.pack("<I", 36 + data_len))
-        wav.extend(b"WAVE")
-        wav.extend(b"fmt ")
-        wav.extend(struct.pack("<I", 16))  # fmt chunk size
-        wav.extend(struct.pack("<H", 1))   # PCM format
-        wav.extend(struct.pack("<H", channels))
-        wav.extend(struct.pack("<I", sample_rate))
-        wav.extend(struct.pack("<I", byte_rate))
-        wav.extend(struct.pack("<H", block_align))
-        wav.extend(struct.pack("<H", bits_per_sample))
-        wav.extend(b"data")
-        wav.extend(struct.pack("<I", data_len))
-        wav.extend(pcm)
-
-        return bytes(wav)
