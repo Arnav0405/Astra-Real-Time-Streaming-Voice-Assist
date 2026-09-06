@@ -13,6 +13,7 @@ import (
 	"github.com/arnav/astra/services/backend/internal/endpoint"
 	"github.com/arnav/astra/services/backend/internal/llm"
 	"github.com/arnav/astra/services/backend/internal/metrics"
+	"github.com/arnav/astra/services/backend/internal/pb"
 	"github.com/arnav/astra/services/backend/internal/server"
 	"github.com/arnav/astra/services/backend/internal/tts"
 	"github.com/arnav/astra/services/backend/internal/turn"
@@ -22,8 +23,9 @@ import (
 
 type drainSink struct {
 	server.Sink
-	worker *asr.Worker
-	runner *turn.Runner
+	worker       *asr.Worker
+	streamWorker *asr.StreamWorker
+	runner       *turn.Runner
 }
 
 func (s drainSink) Run(frames <-chan server.Frame) {
@@ -34,6 +36,9 @@ func (s drainSink) Run(frames <-chan server.Frame) {
 		}
 		if s.worker != nil {
 			s.worker.Close()
+		}
+		if s.streamWorker != nil {
+			s.streamWorker.Close()
 		}
 	}()
 }
@@ -76,7 +81,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Load ASR config for streaming worker
 	var asrClient *asr.Client
+	var asrGRPCAddr, asrModel, asrLanguage string
+	var asrChunkFrames, asrOverlapFrames, asrGraceFrames int
 	if *noASR {
 		log.Print("asr disabled (-no-asr): utterances will not be transcribed")
 	} else {
@@ -90,6 +98,12 @@ func main() {
 			log.Fatal(err)
 		}
 		asrClient = asr.NewClient(acfg, key)
+		asrGRPCAddr = acfg.GRPCAddress
+		asrModel = acfg.Model
+		asrLanguage = acfg.Language
+		asrChunkFrames = acfg.ChunkFrames
+		asrOverlapFrames = acfg.OverlapFrames
+		asrGraceFrames = acfg.GraceFrames
 		log.Printf("asr enabled: %s model %s", acfg.BaseURL, acfg.Model)
 	}
 
@@ -97,6 +111,8 @@ func main() {
 	// there is no transcript and nothing to say.
 	var llmClient *llm.Client
 	var ttsClient *tts.Client
+	var lcfg llm.Config
+	var tcfg tts.Config
 	switch {
 	case *noReply:
 		log.Print("reply disabled (-no-reply): transcripts will not be answered")
@@ -108,11 +124,11 @@ func main() {
 		if key == "" {
 			log.Fatalf("NAGA_API_KEY not set (checked environment and %s); pass -no-reply to run without spoken replies", *envFile)
 		}
-		lcfg, err := llm.LoadConfig(*llmConfig)
+		lcfg, err = llm.LoadConfig(*llmConfig)
 		if err != nil {
 			log.Fatal(err)
 		}
-		tcfg, err := tts.LoadConfig(*ttsConfig)
+		tcfg, err = tts.LoadConfig(*ttsConfig)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -122,58 +138,59 @@ func main() {
 			lcfg.Model, tcfg.Model, tcfg.Voice, tcfg.SampleRateHz)
 	}
 
-	// onUtterance for a stream: optional WAV dumper (-endpoint-wav-dir), then
-	// the ASR worker; with neither, nil (the machine logs each utterance).
-	// Per-stream because the dumper owns its filename counter and the worker
-	// its queue. Under -verbose, wrap it so the utterance end is always logged.
-	// The returned worker is nil when ASR is disabled.
-	makeOnUtterance := func(streamID string, rec *metrics.Recorder, onTranscript func(asr.Transcript)) (func(endpoint.Utterance), *asr.Worker) {
-		var next func(endpoint.Utterance)
-		var worker *asr.Worker
-		if asrClient != nil {
-			worker = asr.NewWorker(streamID, asrClient, onTranscript)
-			next = func(u endpoint.Utterance) { worker.Enqueue(u) }
-		}
-		if *endpointWavDir != "" {
-			dump, err := endpoint.NewWavDumper(*endpointWavDir, streamID)
-			if err != nil {
-				log.Printf("stream %s: wav dumper disabled: %v", streamID, err)
-			} else {
-				enqueue := next
-				next = func(u endpoint.Utterance) {
-					dump(u)
-					if enqueue != nil {
-						enqueue(u)
-					}
+// onUtterance for a stream: optional WAV dumper (-endpoint-wav-dir), then
+// the ASR worker; with neither, nil (the machine logs each utterance).
+// Per-stream because the dumper owns its filename counter and the worker
+// its queue. Under -verbose, wrap it so the utterance end is always logged.
+// The returned worker is nil when ASR is disabled or when streaming ASR is used.
+makeOnUtterance := func(streamID string, rec *metrics.Recorder, onTranscript func(asr.Transcript), useStreaming bool) (func(endpoint.Utterance), *asr.Worker) {
+	var next func(endpoint.Utterance)
+	var worker *asr.Worker
+	// Only create HTTP worker if NOT using streaming ASR
+	if asrClient != nil && !useStreaming {
+		worker = asr.NewWorker(streamID, asrClient, onTranscript)
+		next = func(u endpoint.Utterance) { worker.Enqueue(u) }
+	}
+	if *endpointWavDir != "" {
+		dump, err := endpoint.NewWavDumper(*endpointWavDir, streamID)
+		if err != nil {
+			log.Printf("stream %s: wav dumper disabled: %v", streamID, err)
+		} else {
+			enqueue := next
+			next = func(u endpoint.Utterance) {
+				dump(u)
+				if enqueue != nil {
+					enqueue(u)
 				}
 			}
 		}
-		// A nil consumer and no tracing means the machine logs the utterance
-		// itself, so keep the nil rather than swallowing that.
-		if next == nil && !*verbose {
-			return nil, worker
-		}
-		inner := next
-		return func(u endpoint.Utterance) {
-			// Outermost, so the endpoint tail is stamped at the close itself
-			// rather than after the WAV dump or the ASR enqueue.
-			rec.Utterance(u.StartSeq)
-			if *verbose {
-				log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
-					streamID, u.FrameCount, u.StartSeq, u.EndSeq)
-			}
-			if inner != nil {
-				inner(u)
-			}
-		}, worker
 	}
+	// A nil consumer and no tracing means the machine logs the utterance
+	// itself, so keep the nil rather than swallowing that.
+	if next == nil && !*verbose {
+		return nil, worker
+	}
+	inner := next
+	return func(u endpoint.Utterance) {
+		// Outermost, so the endpoint tail is stamped at the close itself
+		// rather than after the WAV dump or the ASR enqueue.
+		rec.Utterance(u.StartSeq)
+		if *verbose {
+			log.Printf("[%s] UTTR ⏹ listening end — utterance %d frames (seq %d-%d)",
+				streamID, u.FrameCount, u.StartSeq, u.EndSeq)
+		}
+		if inner != nil {
+			inner(u)
+		}
+	}, worker
+}
 
-	withDrain := func(s server.Sink, w *asr.Worker, r *turn.Runner) server.Sink {
-		if w == nil && r == nil {
-			return s
-		}
-		return drainSink{Sink: s, worker: w, runner: r}
+withDrain := func(s server.Sink, w *asr.Worker, sw *asr.StreamWorker, r *turn.Runner) server.Sink {
+	if w == nil && sw == nil && r == nil {
+		return s
 	}
+	return drainSink{Sink: s, worker: w, streamWorker: sw, runner: r}
+}
 
 	replyEnabled := llmClient != nil && ttsClient != nil
 
@@ -181,39 +198,96 @@ func main() {
 	// two reference each other by design — the machine cancels the reply on
 	// barge-in, the runner tells the machine when playback starts and stops —
 	// so the machine is built first and the runner reached through a closure.
-	buildTurn := func(streamID string, send server.Sender, mode endpoint.Mode, rec *metrics.Recorder) (*endpoint.Machine, *asr.Worker, *turn.Runner) {
-		var runner *turn.Runner
-		// Every outbound message passes the recorder on its way to the socket:
-		// Transcript, the first ReplyDelta and the first ReplyAudio are the
-		// ASR/LLM/TTS boundaries, and Cancel closes the barge-in chain.
-		send = rec.Wrap(send)
+buildTurn := func(streamID string, send server.Sender, mode endpoint.Mode, rec *metrics.Recorder) (*endpoint.Machine, *asr.Worker, *asr.StreamWorker, *turn.Runner) {
+	var runner *turn.Runner
+	// Every outbound message passes the recorder on its way to the socket:
+	// Transcript, the first ReplyDelta and the first ReplyAudio are the
+	// ASR/LLM/TTS boundaries, and Cancel closes the barge-in chain.
+	send = rec.Wrap(send)
 
-		var onTranscript func(asr.Transcript)
-		if replyEnabled {
-			onTranscript = func(t asr.Transcript) {
-				if *verbose {
-					log.Printf("[%s] TEXT 💬 %q", streamID, t.Text)
-				}
-				runner.Start(t)
+	var onTranscript func(asr.Transcript)
+	if replyEnabled {
+		onTranscript = func(t asr.Transcript) {
+			if *verbose {
+				log.Printf("[%s] TEXT 💬 %q", streamID, t.Text)
 			}
+			runner.Start(t)
 		}
-		onUtt, worker := makeOnUtterance(streamID, rec, onTranscript)
+	}
+	onUtt, worker := makeOnUtterance(streamID, rec, onTranscript, asrClient != nil)
 
-		m := endpoint.NewMachine(streamID, epCfg, mode, onUtt, func() {
-			rec.Barge()
-			if runner == nil {
+	// Create StreamWorker for streaming ASR
+	var streamWorker *asr.StreamWorker
+	if asrClient != nil {
+		swCfg := &asr.StreamWorkerConfig{
+			GRPCAddress:   asrGRPCAddr,
+			Model:         asrModel,
+			Language:      asrLanguage,
+			ChunkFrames:   asrChunkFrames,
+			OverlapFrames: asrOverlapFrames,
+			GraceFrames:   asrGraceFrames,
+		}
+		streamWorker = asr.NewStreamWorker(streamID, swCfg, func(t asr.StreamTranscript) {
+			if strings.TrimSpace(t.Text) == "" {
 				return
 			}
 			if *verbose {
-				log.Printf("[%s] BARG ✋ user talked over the reply — cancelling", streamID)
+				if t.IsFinal {
+					log.Printf("[%s] TEXT 💬 (final) %q", streamID, t.Text)
+				} else {
+					log.Printf("[%s] TEXT 💬 (partial) %q", streamID, t.Text)
+				}
 			}
-			runner.Barge()
+			// The ASR path owns transcript emission: partials stream as they
+			// come, the final goes out once, and the reply runner only starts
+			// the turn. runner is captured by reference; it is set before any
+			// transcript can arrive.
+			if err := send(&pb.ServerMessage{Msg: &pb.ServerMessage_Transcript{
+				Transcript: &pb.Transcript{UtteranceId: t.StartSeq, Text: t.Text, IsFinal: t.IsFinal},
+			}}); err != nil {
+				return // client gone
+			}
+			if t.IsFinal && runner != nil {
+				runner.Start(asr.Transcript{Text: t.Text, StreamID: t.StreamID, StartSeq: t.StartSeq, EndSeq: t.EndSeq, FrameCount: t.FrameCount})
+			}
 		})
-		if replyEnabled {
-			runner = turn.NewRunner(streamID, send, llmClient, ttsClient, ttsClient.SampleRateHz(), m.SetSpeaking)
+		if err := streamWorker.Start(); err != nil {
+			log.Printf("stream %s: stream worker start FAILED (gRPC connection error): %v", streamID, err)
+			streamWorker = nil
+		} else {
+			log.Printf("stream %s: stream worker started, connected to %s", streamID, asrGRPCAddr)
 		}
-		return m, worker, runner
 	}
+
+	m := endpoint.NewMachine(streamID, epCfg, mode, onUtt, func() {
+		rec.Barge()
+		if runner == nil {
+			return
+		}
+		if *verbose {
+			log.Printf("[%s] BARG ✋ user talked over the reply — cancelling", streamID)
+		}
+		runner.Barge()
+	}, func(startSeq uint64, preroll []byte) {
+		if streamWorker == nil {
+			return
+		}
+		if len(preroll) > 0 {
+			// Barge-in: arm the ASR stream seeded with the buffered onset.
+			streamWorker.BargeIn(startSeq, preroll)
+		} else {
+			streamWorker.Arm(startSeq)
+		}
+	}, func() {
+		if streamWorker != nil {
+			streamWorker.Disarm(0)
+		}
+	})
+	if replyEnabled {
+		runner = turn.NewRunner(streamID, send, llmClient, ttsClient, ttsClient.SampleRateHz(), m.SetSpeaking, lcfg.HistoryMaxTokens, lcfg.HistoryMaxTurns)
+	}
+	return m, worker, streamWorker, runner
+}
 
 	// Phase 8 timing taps. Same shape as the -verbose tracing below and applied
 	// outside it, so a boundary is stamped before anything else reacts to it.
@@ -274,9 +348,16 @@ func main() {
 	if *wwModel == "" {
 		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
 			rec := metrics.New(streamID, false)
-			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnVad, rec)
+			m, worker, streamWorker, runner := buildTurn(streamID, send, endpoint.ArmOnVad, rec)
+			// Wrap OnFrame to also forward frames to StreamWorker when armed
+			frameForward := recFrame(rec, func(seq uint64, pcm []byte) {
+				m.OnFrame(seq, pcm)
+				if streamWorker != nil && m.IsArmed() {
+					streamWorker.PushFrame(seq, pcm)
+				}
+			})
 			return withDrain(vad.NewSink(streamID, engine, cfg,
-				recVad(rec, traceVad(streamID, m.OnVad)), recFrame(rec, m.OnFrame)), worker, runner)
+				recVad(rec, traceVad(streamID, m.OnVad)), frameForward), worker, streamWorker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word disabled)", *addr, *vadModel)
 	} else {
@@ -297,11 +378,17 @@ func main() {
 		defer wwEngine.Close()
 		srv.NewSink = func(streamID string, send server.Sender) server.Sink {
 			rec := metrics.New(streamID, true)
-			m, worker, runner := buildTurn(streamID, send, endpoint.ArmOnWake, rec)
+			m, worker, streamWorker, runner := buildTurn(streamID, send, endpoint.ArmOnWake, rec)
+			frameForward := recFrame(rec, func(seq uint64, pcm []byte) {
+				m.OnFrame(seq, pcm)
+				if streamWorker != nil && m.IsArmed() {
+					streamWorker.PushFrame(seq, pcm)
+				}
+			})
 			return withDrain(wakeword.NewSink(streamID, engine, cfg, wwEngine, wwCfg,
 				recVad(rec, traceVad(streamID, m.OnVad)),
 				recWake(rec, traceWake(streamID, m.OnWake)),
-				recFrame(rec, m.OnFrame)), worker, runner)
+				frameForward), worker, streamWorker, runner)
 		}
 		log.Printf("astra listening on %s (vad: %s, wake word: %s)", *addr, *vadModel, *wwModel)
 	}
