@@ -60,10 +60,12 @@ message Error {
   string message = 2;
 }
 
-// What the user said, once the utterance closed and ASR returned.
+// What the user said. Partials stream while the utterance is open (is_final
+// false, each message the full text so far); the final closes it.
 message Transcript {
   uint64 utterance_id = 1; // seq of the utterance's first frame
   string text = 2;
+  bool is_final = 3;
 }
 
 // One chunk of the assistant's reply text, as the LLM streams it. Display
