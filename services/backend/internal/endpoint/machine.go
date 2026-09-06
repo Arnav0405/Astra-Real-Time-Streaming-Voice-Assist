@@ -48,6 +48,11 @@ type Machine struct {
 	mode        Mode
 	onUtterance func(Utterance)
 	onBargeIn   func()
+	// onArm fires when the machine starts capturing. preroll is non-nil only
+	// on barge-in: the buffered onset frames, which the ASR side must seed the
+	// new stream with.
+	onArm   func(startSeq uint64, preroll []byte)
+	onClose func() // called when closing (after grace)
 
 	state       int
 	buf         []byte
@@ -76,7 +81,10 @@ type Machine struct {
 // NewMachine returns a per-stream endpoint machine. A nil onUtterance logs.
 // onBargeIn, if non-nil, fires when the user talks over the assistant; it must
 // not block, since it runs on the frame path.
-func NewMachine(streamID string, cfg *Config, mode Mode, onUtterance func(Utterance), onBargeIn func()) *Machine {
+// onArm, if non-nil, fires when the machine arms (starts capturing); on
+// barge-in it carries the buffered preroll PCM. onClose, if non-nil, fires
+// when the machine closes (after grace period).
+func NewMachine(streamID string, cfg *Config, mode Mode, onUtterance func(Utterance), onBargeIn func(), onArm func(startSeq uint64, preroll []byte), onClose func()) *Machine {
 	if onUtterance == nil {
 		onUtterance = func(u Utterance) {
 			log.Printf("stream %s: utterance seq %d-%d (%d frames)", streamID, u.StartSeq, u.EndSeq, u.FrameCount)
@@ -89,6 +97,8 @@ func NewMachine(streamID string, cfg *Config, mode Mode, onUtterance func(Uttera
 		mode:        mode,
 		onUtterance: onUtterance,
 		onBargeIn:   onBargeIn,
+		onArm:       onArm,
+		onClose:     onClose,
 		ring:        make([][]byte, ringSize),
 		ringSeq:     make([]uint64, ringSize),
 	}
@@ -101,6 +111,11 @@ func NewMachine(streamID string, cfg *Config, mode Mode, onUtterance func(Uttera
 // there, it records the request and the frame goroutine applies it on the next
 // event, so every field of Machine stays owned by a single goroutine.
 func (m *Machine) SetSpeaking(v bool) { m.speakingReq.Store(v) }
+
+// IsArmed returns true if the machine is currently capturing speech (state is capturing or grace).
+func (m *Machine) IsArmed() bool {
+	return m.state == capturing || m.state == grace
+}
 
 // applySpeaking reconciles the requested playback state. Called at the top of
 // both OnVad and OnFrame so a speech_start arriving in the same frame as the
@@ -193,12 +208,17 @@ func (m *Machine) OnFrame(seq uint64, pcm []byte) {
 }
 
 // bargeIn confirms the user is talking over the assistant: it opens an
-// utterance seeded with the buffered onset, then notifies the caller so the
-// reply can be cancelled.
+// utterance seeded with the buffered onset, hands that preroll to the ASR
+// side via onArm, then notifies the caller so the reply can be cancelled.
 func (m *Machine) bargeIn() {
-	m.arm()
+	m.startCapture()
 	m.seedFromRing()
+	preroll := make([]byte, len(m.buf))
+	copy(preroll, m.buf)
 	m.resetBarge()
+	if m.onArm != nil {
+		m.onArm(m.startSeq, preroll)
+	}
 	if m.onBargeIn != nil {
 		m.onBargeIn()
 	}
@@ -248,6 +268,15 @@ func (m *Machine) resetBarge() {
 }
 
 func (m *Machine) arm() {
+	m.startCapture()
+	if m.onArm != nil {
+		m.onArm(m.startSeq, nil)
+	}
+}
+
+// startCapture resets the capture state without notifying anyone. arm() and
+// bargeIn() layer their own notifications on top of it.
+func (m *Machine) startCapture() {
 	m.state = capturing
 	m.buf = m.buf[:0]
 	m.frames = 0
@@ -276,4 +305,7 @@ func (m *Machine) close() {
 	m.frames = 0
 	m.framesAtEnd = 0
 	m.graceCount = 0
+	if m.onClose != nil {
+		m.onClose()
+	}
 }

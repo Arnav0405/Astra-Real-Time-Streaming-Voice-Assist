@@ -16,11 +16,23 @@ type harness struct {
 	seq    uint64
 	utts   []Utterance
 	barges int
+	arms   []armEvent
+}
+
+type armEvent struct {
+	startSeq uint64
+	preroll  []byte
 }
 
 func newHarness(mode Mode, cfg *Config) *harness {
 	h := &harness{}
-	h.m = NewMachine("test", cfg, mode, func(u Utterance) { h.utts = append(h.utts, u) }, func() { h.barges++ })
+	h.m = NewMachine("test", cfg, mode,
+		func(u Utterance) { h.utts = append(h.utts, u) },
+		func() { h.barges++ },
+		func(startSeq uint64, preroll []byte) {
+			h.arms = append(h.arms, armEvent{startSeq: startSeq, preroll: append([]byte(nil), preroll...)})
+		},
+		nil)
 	return h
 }
 
@@ -237,6 +249,58 @@ func TestBargeInKeepsOnsetViaPreroll(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("frame %d (stamp %d) missing from the utterance buffer", onset, want)
+	}
+}
+
+// The ASR stream worker is armed with the preroll so the barge-in onset is
+// transcribed by the streaming path too, and with the onset's seq — not the
+// previous utterance's.
+func TestBargeInHandsPrerollToArm(t *testing.T) {
+	h := newHarness(ArmOnWake, testCfg())
+	h.m.SetSpeaking(true)
+
+	h.frames(20) // assistant talking, user silent
+	onset := h.seq
+	h.vadStart()
+	h.frames(6) // triggers the barge-in on the 6th
+
+	if len(h.arms) != 1 {
+		t.Fatalf("want 1 arm on barge-in, got %d", len(h.arms))
+	}
+	a := h.arms[0]
+	if a.startSeq > onset {
+		t.Errorf("arm startSeq = %d, after speech onset at %d — the first words were lost", a.startSeq, onset)
+	}
+	// The ring pads bargeRingSlack frames beyond the confirmation window, so
+	// the preroll is at least BargeInFrames long.
+	if got := len(a.preroll); got < 6*frameBytes {
+		t.Errorf("preroll len = %d, want at least %d (BargeInFrames)", got, 6*frameBytes)
+	}
+	// The onset frame's stamped PCM must be inside the preroll.
+	want := byte(onset)
+	found := false
+	for i := 0; i < len(a.preroll); i += frameBytes {
+		if a.preroll[i] == want {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("frame %d (stamp %d) missing from the preroll", onset, want)
+	}
+}
+
+// Normal (non-barge) arming must carry no preroll, so the stream worker arms
+// the plain way.
+func TestNormalArmHasNoPreroll(t *testing.T) {
+	h := newHarness(ArmOnVad, testCfg())
+	h.vadStart()
+
+	if len(h.arms) != 1 {
+		t.Fatalf("want 1 arm, got %d", len(h.arms))
+	}
+	if got := len(h.arms[0].preroll); got != 0 {
+		t.Errorf("normal arm carried preroll of %d bytes", got)
 	}
 }
 
