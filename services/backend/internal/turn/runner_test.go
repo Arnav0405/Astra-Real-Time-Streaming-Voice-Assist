@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/arnav/astra/services/backend/internal/asr"
+	"github.com/arnav/astra/services/backend/internal/llm"
 	"github.com/arnav/astra/services/backend/internal/pb"
 )
 
@@ -36,6 +37,10 @@ func (f *fakeLLM) Stream(ctx context.Context, _ string, onDelta func(string)) er
 		}
 	}
 	return f.err
+}
+
+func (f *fakeLLM) StreamWithHistory(ctx context.Context, _ string, _ []llm.ChatMessage, onDelta func(string)) error {
+	return f.Stream(ctx, "", onDelta)
 }
 
 // fakeTTS returns a fixed amount of PCM per sentence and records what it was
@@ -156,17 +161,19 @@ func transcript(text string) asr.Transcript {
 	return asr.Transcript{StreamID: "s", Text: text, StartSeq: 42}
 }
 
-func TestTurnEmitsTranscriptThenAudioThenEnd(t *testing.T) {
+// The transcript itself is emitted by the ASR path, so the runner's first
+// message is the first reply delta.
+func TestTurnEmitsAudioThenEnd(t *testing.T) {
 	rec := newRecorder()
 	synth := &fakeTTS{bytes: 480}
-	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"Hello there. ", "How are you? "}}, synth, testRate, nil)
+	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"Hello there. ", "How are you? "}}, synth, testRate, nil, 2000, 4)
 	r.Start(transcript("hi"))
 	rec.waitEnd(t)
 	r.Close()
 
 	kinds := rec.kinds()
-	if len(kinds) == 0 || kinds[0] != "transcript" {
-		t.Fatalf("first message = %v, want transcript first", kinds)
+	if len(kinds) == 0 || kinds[0] != "delta" {
+		t.Fatalf("first message = %v, want delta first", kinds)
 	}
 	if !has(kinds, "audio") {
 		t.Errorf("no audio emitted: %v", kinds)
@@ -189,7 +196,7 @@ func TestTurnEmitsTranscriptThenAudioThenEnd(t *testing.T) {
 func TestEmptyTranscriptRunsNoTurn(t *testing.T) {
 	rec := newRecorder()
 	synth := &fakeTTS{bytes: 480}
-	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"unused"}}, synth, testRate, nil)
+	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"unused"}}, synth, testRate, nil, 2000, 4)
 	r.Start(transcript("   "))
 	r.Close()
 
@@ -210,7 +217,7 @@ func TestBargeEmitsCancelBeforeEnd(t *testing.T) {
 	synth := &fakeTTS{bytes: 480}
 	llm := &fakeLLM{deltas: []string{"One. ", "Two. ", "Three. ", "Four. "}, gap: 50 * time.Millisecond}
 
-	r := NewRunner("s", rec.send, llm, synth, testRate, func(v bool) { speaking <- v })
+	r := NewRunner("s", rec.send, llm, synth, testRate, func(v bool) { speaking <- v }, 2000, 4)
 	r.Start(transcript("hi"))
 
 	select {
@@ -251,7 +258,7 @@ func TestBargeEmitsCancelBeforeEnd(t *testing.T) {
 func TestCloseWithoutBargeDoesNotCancel(t *testing.T) {
 	rec := newRecorder()
 	llm := &fakeLLM{deltas: []string{"One. ", "Two. ", "Three. "}, gap: 80 * time.Millisecond}
-	r := NewRunner("s", rec.send, llm, &fakeTTS{bytes: 480}, testRate, nil)
+	r := NewRunner("s", rec.send, llm, &fakeTTS{bytes: 480}, testRate, nil, 2000, 4)
 	r.Start(transcript("hi"))
 	time.Sleep(30 * time.Millisecond)
 	r.Close()
@@ -263,7 +270,7 @@ func TestCloseWithoutBargeDoesNotCancel(t *testing.T) {
 
 func TestLLMErrorEndsTurnAsError(t *testing.T) {
 	rec := newRecorder()
-	r := NewRunner("s", rec.send, &fakeLLM{err: errors.New("boom")}, &fakeTTS{bytes: 480}, testRate, nil)
+	r := NewRunner("s", rec.send, &fakeLLM{err: errors.New("boom")}, &fakeTTS{bytes: 480}, testRate, nil, 2000, 4)
 	r.Start(transcript("hi"))
 	rec.waitEnd(t)
 	r.Close()
@@ -291,7 +298,7 @@ func TestStartSupersedesInFlightTurn(t *testing.T) {
 		} else {
 			active--
 		}
-	})
+	}, 2000, 4)
 	r.Start(transcript("first"))
 	time.Sleep(60 * time.Millisecond)
 	r.Start(transcript("second"))
@@ -308,7 +315,7 @@ func TestSendFailureAbortsTurn(t *testing.T) {
 	rec := newRecorder()
 	rec.err = errors.New("client gone")
 	synth := &fakeTTS{bytes: 480}
-	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"Hello there. "}}, synth, testRate, nil)
+	r := NewRunner("s", rec.send, &fakeLLM{deltas: []string{"Hello there. "}}, synth, testRate, nil, 2000, 4)
 
 	done := make(chan struct{})
 	go func() { defer close(done); r.Start(transcript("hi")); r.Close() }()
@@ -317,15 +324,12 @@ func TestSendFailureAbortsTurn(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("turn did not abort when the client was gone")
 	}
-	if said := synth.said(); len(said) != 0 {
-		t.Errorf("TTS was called after the transcript send failed: %q", said)
-	}
 }
 
 // pace must hold audio near realtime so a later Cancel is not stuck behind
 // seconds of queued playback.
 func TestPaceHoldsAudioNearRealtime(t *testing.T) {
-	r := NewRunner("s", func(*pb.ServerMessage) error { return nil }, nil, nil, testRate, nil)
+	r := NewRunner("s", func(*pb.ServerMessage) error { return nil }, nil, nil, testRate, nil, 2000, 4)
 	start := time.Now()
 	// 2 seconds of 24 kHz s16le audio claimed as already sent.
 	twoSeconds := testRate * 2 * 2
@@ -340,7 +344,7 @@ func TestPaceHoldsAudioNearRealtime(t *testing.T) {
 }
 
 func TestPaceReturnsOnCancel(t *testing.T) {
-	r := NewRunner("s", func(*pb.ServerMessage) error { return nil }, nil, nil, testRate, nil)
+	r := NewRunner("s", func(*pb.ServerMessage) error { return nil }, nil, nil, testRate, nil, 2000, 4)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(50 * time.Millisecond); cancel() }()
 
