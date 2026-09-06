@@ -260,9 +260,11 @@ function handle(msg) {
       break;
 
     case 'transcript':
+      // The server coalesces: every message carries the full text so far.
       els.transcript.textContent = msg.transcript.text;
+      els.transcript.classList.toggle('partial', !msg.transcript.isFinal);
       els.reply.textContent = '';
-      log('you', msg.transcript.text);
+      if (msg.transcript.isFinal) log('you', msg.transcript.text);
       break;
 
     case 'replyDelta':
