@@ -54,7 +54,7 @@ type Runner struct {
 	onSpeaking func(bool)
 
 	// Conversation history for context-aware replies
-	history      []llm.ChatMessage
+	history          []llm.ChatMessage
 	maxHistoryTokens int
 	maxHistoryTurns  int
 
@@ -81,8 +81,6 @@ func NewRunner(streamID string, send func(*pb.ServerMessage) error, streamer llm
 	}
 }
 
-// Start begins a reply to t, superseding any turn still in flight. It blocks
-// until the previous turn has unwound so two turns can never speak at once.
 func (r *Runner) Start(t asr.Transcript) {
 	r.mu.Lock()
 	prev := r.cur
@@ -94,7 +92,7 @@ func (r *Runner) Start(t asr.Transcript) {
 		<-prev.done
 	}
 	if closed || strings.TrimSpace(t.Text) == "" {
-		return // nothing said, or the stream is going away: no turn to run
+		return
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

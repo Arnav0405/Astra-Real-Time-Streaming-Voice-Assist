@@ -52,6 +52,16 @@ type controlMsg struct {
 	pcm  []byte
 }
 
+// Transcript is one transcribed utterance, handed to the downstream consumer
+// (the LLM reply runner). Built from a StreamTranscript in the streaming path.
+type Transcript struct {
+	StreamID   string
+	Text       string
+	StartSeq   uint64
+	EndSeq     uint64
+	FrameCount int
+}
+
 // StreamTranscript is a partial or final transcript from streaming ASR.
 type StreamTranscript struct {
 	StreamID   string
