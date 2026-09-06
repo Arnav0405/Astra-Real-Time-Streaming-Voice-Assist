@@ -12,6 +12,7 @@ services/backend/bin/
 *.out
 coverage.html
 services/backend/*.wav
+*.exe
 
 # Python
 __pycache__/

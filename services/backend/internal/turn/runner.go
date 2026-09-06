@@ -53,6 +53,11 @@ type Runner struct {
 	rate       int
 	onSpeaking func(bool)
 
+	// Conversation history for context-aware replies
+	history      []llm.ChatMessage
+	maxHistoryTokens int
+	maxHistoryTurns  int
+
 	mu     sync.Mutex
 	cur    *state
 	closed bool
@@ -62,14 +67,17 @@ type Runner struct {
 // the PCM synth produces. onSpeaking, if non-nil, is called with true when the
 // first audio of a turn goes out and false when the turn ends — the endpoint
 // machine uses it to know when barge-in is possible.
-func NewRunner(streamID string, send func(*pb.ServerMessage) error, streamer llm.Streamer, synth tts.Synthesizer, rate int, onSpeaking func(bool)) *Runner {
+// maxHistoryTokens and maxHistoryTurns control conversation history truncation.
+func NewRunner(streamID string, send func(*pb.ServerMessage) error, streamer llm.Streamer, synth tts.Synthesizer, rate int, onSpeaking func(bool), maxHistoryTokens, maxHistoryTurns int) *Runner {
 	return &Runner{
-		streamID:   streamID,
-		send:       send,
-		streamer:   streamer,
-		synth:      synth,
-		rate:       rate,
-		onSpeaking: onSpeaking,
+		streamID:         streamID,
+		send:             send,
+		streamer:         streamer,
+		synth:            synth,
+		rate:             rate,
+		onSpeaking:       onSpeaking,
+		maxHistoryTokens: maxHistoryTokens,
+		maxHistoryTurns:  maxHistoryTurns,
 	}
 }
 
@@ -144,14 +152,15 @@ func (r *Runner) Close() {
 
 func (r *Runner) run(ctx context.Context, st *state, t asr.Transcript) {
 	id := t.StartSeq
-	if err := r.emit(&pb.ServerMessage{Msg: &pb.ServerMessage_Transcript{
-		Transcript: &pb.Transcript{UtteranceId: id, Text: t.Text},
-	}}); err != nil {
-		return // client gone
-	}
 
 	sentences := make(chan string, sentenceQueue)
 	var llmErr error
+
+	// Get a copy of current history for this turn
+	r.mu.Lock()
+	history := make([]llm.ChatMessage, len(r.history))
+	copy(history, r.history)
+	r.mu.Unlock()
 
 	// Generation and synthesis are pipelined: the first sentence is being
 	// spoken while the rest of the reply is still being generated. Running
@@ -159,12 +168,14 @@ func (r *Runner) run(ctx context.Context, st *state, t asr.Transcript) {
 	go func() {
 		defer close(sentences)
 		var buf string
-		llmErr = r.streamer.Stream(ctx, t.Text, func(d string) {
+		var assistantReply strings.Builder
+		llmErr = r.streamer.StreamWithHistory(ctx, t.Text, history, func(d string) {
 			if err := r.emit(&pb.ServerMessage{Msg: &pb.ServerMessage_ReplyDelta{
 				ReplyDelta: &pb.ReplyDelta{UtteranceId: id, Text: d},
 			}}); err != nil {
 				return
 			}
+			assistantReply.WriteString(d)
 			buf += d
 			for {
 				chunk, rest, ok := nextChunk(buf)
@@ -184,6 +195,15 @@ func (r *Runner) run(ctx context.Context, st *state, t asr.Transcript) {
 			case sentences <- rem:
 			case <-ctx.Done():
 			}
+		}
+		// Store assistant reply in history after completion
+		if assistantReply.Len() > 0 {
+			r.mu.Lock()
+			r.history = append(r.history,
+				llm.ChatMessage{Role: "user", Content: t.Text},
+				llm.ChatMessage{Role: "assistant", Content: assistantReply.String()},
+			)
+			r.mu.Unlock()
 		}
 	}()
 

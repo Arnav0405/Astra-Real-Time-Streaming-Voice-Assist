@@ -20,6 +20,12 @@ type Config struct {
 	// MaxTokens caps a reply. A runaway answer is a barge-in the user has to
 	// perform manually; bound it server-side instead.
 	MaxTokens int `json:"max_tokens"`
+	// HistoryMaxTokens caps the total tokens for conversation history sent
+	// with each request. History is truncated from the oldest to fit.
+	HistoryMaxTokens int `json:"history_max_tokens"`
+	// HistoryMaxTurns limits the number of user/assistant turns to include
+	// in history. Older turns are dropped first.
+	HistoryMaxTurns int `json:"history_max_turns"`
 }
 
 // LoadConfig reads and validates the LLM config file.
@@ -37,6 +43,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if cfg.MaxTokens <= 0 {
 		return Config{}, fmt.Errorf("llm config %s: max_tokens must be > 0", path)
+	}
+	if cfg.HistoryMaxTokens <= 0 {
+		cfg.HistoryMaxTokens = 2000
+	}
+	if cfg.HistoryMaxTurns <= 0 {
+		cfg.HistoryMaxTurns = 4
 	}
 	return cfg, nil
 }
