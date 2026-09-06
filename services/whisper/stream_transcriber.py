@@ -48,11 +48,17 @@ def _get_model(model_size: str) -> WhisperModel:
 class StreamingTranscriber:
     """Streaming transcription with chunked inference and overlap."""
 
-    def __init__(self, model_size: str = "small", language: str = "en"):
+    def __init__(
+        self,
+        model_size: str = "small",
+        language: str = "en",
+        chunk_frames: int = 150,
+        overlap_frames: int = 50,
+    ):
         self.model_size = model_size
         self.language = language
-        self.chunk_frames = 150  # 3 seconds at 20ms/frame
-        self.overlap_frames = 50  # 1 second overlap
+        self.chunk_frames = chunk_frames
+        self.overlap_frames = overlap_frames
         self.frame_bytes = 640  # 320 samples * 2 bytes (16-bit)
         self.chunk_bytes = self.chunk_frames * self.frame_bytes  # 96000 bytes
         self.overlap_bytes = self.overlap_frames * self.frame_bytes  # 32000 bytes
