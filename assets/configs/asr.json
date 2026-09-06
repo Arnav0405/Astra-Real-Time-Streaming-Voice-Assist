@@ -1,5 +1,9 @@
 {
   "base_url": "http://localhost:8000",
+  "grpc_address": "localhost:50051",
   "model": "small",
-  "language": "en"
+  "language": "en",
+  "chunk_frames": 150,
+  "overlap_frames": 50,
+  "grace_frames": 2
 }

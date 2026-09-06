@@ -2,5 +2,7 @@
   "base_url": "https://api.naga.ac/v1",
   "model": "sonar:free",
   "system_prompt": "You are Astra, a voice assistant. Your reply is read aloud, so answer in one or two short spoken sentences. Never use markdown, lists, code blocks, or emoji.",
-  "max_tokens": 160
+  "max_tokens": 160,
+  "history_max_tokens": 2000,
+  "history_max_turns": 4
 }
