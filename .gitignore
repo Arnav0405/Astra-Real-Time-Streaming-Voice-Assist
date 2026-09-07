@@ -45,3 +45,6 @@ CONTEXT.md
 docs/
 .ocx
 .opencode
+
+# Local Piper voice (~65MB, fetched by `make tts-voice`, baked into the TTS image)
+assets/models/tts/

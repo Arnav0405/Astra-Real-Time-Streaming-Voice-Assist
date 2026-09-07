@@ -4,7 +4,7 @@ ML_DIR := services/ml
 # Guard Go targets until first .go file exists — go tools error on empty modules
 GO_FILES := $(shell find $(GO_DIR) -name '*.go' 2>/dev/null | head -1)
 
-.PHONY: format lint test proto clean docker up
+.PHONY: format lint test proto tts-voice clean docker up
 
 format:
 ifneq ($(GO_FILES),)
@@ -39,6 +39,9 @@ docker:
 
 up:
 	docker compose up --build
+
+tts-voice:
+	python3 scripts/fetch_tts_voice.py
 
 clean:
 	rm -rf $(GO_DIR)/bin $(ML_DIR)/.pytest_cache $(ML_DIR)/.ruff_cache
