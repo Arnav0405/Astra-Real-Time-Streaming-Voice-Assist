@@ -28,10 +28,11 @@ endif
 proto:
 	PATH="$$PATH:$$(go env GOPATH)/bin" protoc \
 		--proto_path=proto \
-		--go_out=$(GO_DIR)/internal/pb \
-		--go_opt=module=github.com/arnav/astra/services/backend/internal/pb \
+		--go_out=$(GO_DIR) \
+		--go_opt=module=github.com/arnav/astra/services/backend \
 		proto/astra/v1/astra.proto \
-		proto/astra/v1/asr.proto
+		proto/astra/v1/asr.proto \
+		proto/astra/v1/tts.proto
 
 docker:
 	docker build -f docker/Dockerfile -t astra .

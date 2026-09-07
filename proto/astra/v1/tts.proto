@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package astra.v1;
+
+option go_package="github.com/arnav/astra/services/backend/internal/tts/pb";
+
+service TTS {
+    rpc Synthesize(SynthesizeRequest) returns (SynthesizeResponse);
+}
+
+message SynthesizeRequest {
+    string text = 1;
+    uint64 utterance_id = 2;
+}
+
+message SynthesizeResponse {
+    oneof msg {
+        AudioStart audio_start = 1;
+        TtsAudioChunk audio_chunk = 2;
+    }
+}
+
+message AudioStart{
+    uint32 sample_rate_hz = 1;
+}
+
+message TtsAudioChunk {
+    bytes pcm = 1;
+    uint64 seq = 2;
+}
