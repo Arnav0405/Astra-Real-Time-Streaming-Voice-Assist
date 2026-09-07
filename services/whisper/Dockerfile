@@ -21,7 +21,7 @@ COPY services/whisper/pyproject.toml services/whisper/uv.lock ./
 RUN uv sync --frozen --no-install-project --compile-bytecode
 
 # App layer.
-COPY services/whisper/main.py services/whisper/transcriber.py ./
+COPY services/whisper/main.py services/whisper/transcriber.py services/whisper/asr_server.py ./
 
 EXPOSE 8000
 
