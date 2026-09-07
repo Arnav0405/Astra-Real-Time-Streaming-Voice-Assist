@@ -43,7 +43,8 @@ Every model boundary is **golden-tested for Python↔Go parity**, per-frame prob
 - **Utterance endpointing** — per-stream state machine: arms on wake word (or speech onset in VAD-only mode), captures PCM, closes on VAD silence + grace window. Pause shorter than grace doesn't cut the speaker off; false fire shorter than `min_utterance_frames` drops silently. Frame-counted (20 ms/frame), no wall-clock.
 - **Whisper transcription** — closed utterances post to a hosted Whisper API (NagaAI, OpenAI-compatible) as in-memory WAVs. Per-stream worker transcribes serially, in order, never blocks the frame path; failures retry once then drop; stream close drains the queue. Feeds `onTranscript` → reply runner. `-no-asr` runs offline.
 - **Spoken replies, streamed** — closed transcript starts a turn: LLM streams tokens, chunker splits into sentences at terminal punctuation (requires trailing space, so `3.14` stays intact), each sentence synthesized while the next generates. Audio paced ≤300 ms ahead of realtime, so a barge-in `Cancel` isn't stuck behind seconds of buffered audio.
-- **Barge-in** — mic stays live during playback, VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms default) cancels the turn: in-flight LLM/TTS requests aborted at the body read, `Cancel` tells the client to flush, utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. Cough or echo burst shorter than threshold: ignored.
+- **Barge-in** — mic stays live during playback, VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms default) cancels the turn: in-flight LLM/TTS requests aborted at the body read, `Cancel` tells the client to flush, utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. Cough or echo burst shorter than threshold: ignored. **The preroll is pushed to the ASR stream as one chunk** (a per-byte gRPC message would have exploded the stream), so the words you spoke at the very start of the interruption are transcribed and fed to the new turn.
+- **Streaming partial transcripts** — ASR partials stream live to the browser as they arrive; the backend coalesces overlapping Whisper chunks (word-level suffix/prefix match) so the running transcript grows cleanly without duplication. Partials render dimmed/italic; the final replaces them normally.
 - **Browser client** — `clients/web`, dependency-free, no build step, served at `/app/`. Exists because barge-in needs the mic live while the speaker plays, and `getUserMedia({echoCancellation:true})` gives WebRTC's AEC3 for free. Capture runs in a 16 kHz `AudioContext` (native resample, server-ready frames from the worklet); playback schedules `AudioBufferSourceNode`s in sequence, so flush = stop every scheduled source.
 - **Latency, measured** — every stage boundary stamped server-side, streamed back as a `Turn` message (browser draws it as a waterfall), plus one JSON line per chain for offline aggregation (`scripts/latency.py`). Instrumentation is a tap: `internal/metrics` runs entirely from wrappers in `cmd/astra`, no stage package touched. Retroactive event indices (VAD reports the frame speech *began* on, not the one it worked that out on) resolve through a ring of frame arrival times, so detector lag gets charged honestly. Numbers below.
 - **One command to run it** — `docker compose up`, open the page, talk. One image: binary, ONNX Runtime (pinned to the parity-verified version), models, browser client; builds natively on amd64/arm64. Zero Go changes — container paths live in `ENTRYPOINT`, `go run ./cmd/astra` from source unchanged. API key passed in, never baked; missing key, server says so and exits.
@@ -64,6 +65,20 @@ Method: recorded utterance replayed through the real pipeline at realtime pacing
 | `llm_ttft` | transcript → first reply token | 624 ms | 1077 ms |
 | `tts_ttfb` | first token → first audio byte written | 1808 ms | 2043 ms |
 | **time to first audio** | **`endpoint_tail + asr + llm_ttft + tts_ttfb`** | **5046 ms** | **6527 ms** |
+
+**Revised metrics — local Whisper + pipelined pipeline.** Same 14-turn replay method, now with a local `faster-whisper` server (small model) replacing the hosted Whisper API, and `chunk_frames: 150` (3 s of audio per partial, 1.6 s overlap). LLM and TTS still hosted:
+
+| span | what it covers | p50 | p90 |
+| --- | --- | ---: | ---: |
+| `vad_detect` | speech onset → the VAD says so | 59 ms | 60 ms |
+| `user_speech` | the person talking — *measured, not latency* | 9509 ms | 9509 ms |
+| `endpoint_tail` | last speech frame → utterance closed (VAD hangover + grace) | 678 ms | 678 ms |
+| `asr` | utterance closed → final transcript on the wire | 172 ms | — |
+| `llm_ttft` | transcript → first reply token | 2417 ms | — |
+| `tts_ttfb` | first token → first audio byte written | 2657 ms | — |
+| **time to first audio** | **`endpoint_tail + asr + llm_ttft + tts_ttfb`** | **5924 ms** | — |
+
+Local Whisper brings `asr` from ~1.7 s down to ~172 ms. The headline latency is now dominated by the hosted LLM and TTS providers — the next improvement target.
 
 Headline excludes `user_speech` (not latency) and `vad_detect` (reported separately), *includes* `endpoint_tail` — that second is ours: VAD's 680 ms hangover + 120 ms grace, frame-counted policy in `assets/configs/endpoint.json`. (Table measured at 300 ms grace; hangover dominates either way.)
 
@@ -93,7 +108,7 @@ Reproduce: run the server with stderr redirected to a file, talk to it, then `py
 
 Loop closes, measured, packaged. One item open, and the measurement is what names it:
 
-- **🔜 Phase 9 — Local Piper TTS.** Waterfall says TTS time-to-first-byte is the top span. Piper runs as ONNX, same Python↔Go boundary every other model here crosses, no network hop, no free-tier ceiling. Cost: espeak-ng phonemization.
+- **🔜 Phase 9 — Local Piper TTS.** Waterfall says TTS time-to-first-byte is the top span. Piper runs as ONNX, same Python↔Go boundary every other model here crosses, no network hop, no free-tier ceiling. Cost: espeak-ng phonemization. After that, local LLM inference is the final frontier for fully offline, sub-2 s end-to-end latency.
 
 Full phase detail lives in [docs/development-roadmap.md](docs/development-roadmap.md).
 
@@ -134,7 +149,7 @@ docker/             Container definitions
 | Model development | Python 3.12, PyTorch |
 | Train/inference boundary | ONNX (Runtime via `yalue/onnxruntime_go`) |
 | Wake word | OpenWakeWord (custom "Astraa" model) |
-| Transcription | Whisper API (OpenAI-compatible) |
+| Transcription | Whisper API (OpenAI-compatible) or local `faster-whisper` over gRPC |
 | Reply | Streaming chat completions (OpenAI-compatible SSE) |
 | Speech synthesis | Streaming TTS (OpenAI-compatible), hosted for now |
 | Echo cancellation | The browser's WebRTC AEC3, via `getUserMedia` |

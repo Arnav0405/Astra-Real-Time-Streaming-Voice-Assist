@@ -8,6 +8,13 @@ Go streaming runtime — the serving path of Astra.
 - Run VAD and wake word inference via ONNX Runtime (models from `../../assets/models/`)
 - Detect utterance endpoints (heuristic over VAD output)
 - Orchestrate Whisper and LLM API calls and stream responses back
+- **Stream partial transcripts to the browser** with overlap dedup (word-level suffix/prefix match)
+- **Handle barge-in with preroll ring buffer** so interrupted words are transcribed
+- **Export latency waterfall metrics** (wake → speech → endpoint → ASR → LLM TTFT → TTS TTFB) as `Turn` messages
+
+- **Streaming partial transcripts** — Whisper partials are coalesced (word-level suffix/prefix overlap dedup) and streamed to the browser in real time, not just the final. The final transcript seeds the LLM turn; partials render dimmed/italic on the client.
+- **Barge-in with preroll** — on a confirmed barge, the endpoint machine's ring-buffered onset is pushed to the ASR gRPC stream as a single chunk (never one byte per message) so the interrupting words are transcribed and seed the new turn. A dead lock bug was found and fixed: the client's send and receive paths no longer share a mutex.
+- **Latency instrumentation** — every boundary is stamped server-side and streamed back as a `Turn` message (browser draws the waterfall) plus one JSON line per chain.
 
 This service never trains models. See [docs/architecture.md](../../docs/architecture.md) for boundaries.
 
