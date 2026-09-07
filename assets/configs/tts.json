@@ -1,7 +1,8 @@
 {
-  "base_url": "https://api.naga.ac/v1",
-  "model": "eleven-multilingual-v2:free",
-  "voice": "Bella - Professional, Bright, Warm",
-  "format": "pcm",
-  "sample_rate_hz": 24000
+  "grpc_address": "localhost:50052",
+  "voice": "en_US-lessac-medium",
+  "sample_rate_hz": 22050,
+  "length_scale": 1.0,
+  "noise_scale": 0.667,
+  "noise_w": 0.333
 }

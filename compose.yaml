@@ -15,6 +15,7 @@ services:
       NAGA_API_KEY: "${NAGA_API_KEY:-}"
     depends_on:
       - whisper
+      - tts
 
   whisper:
     build:
@@ -22,4 +23,12 @@ services:
       dockerfile: services/whisper/Dockerfile
     ports:
       - "8000:8000"
+    restart: unless-stopped
+
+  tts:
+    build:
+      context: .
+      dockerfile: services/tts/Dockerfile
+    ports:
+      - "50052:50052"
     restart: unless-stopped
