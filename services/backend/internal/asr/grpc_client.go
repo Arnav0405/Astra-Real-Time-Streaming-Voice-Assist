@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	astrapb "github.com/arnav/astra/services/backend/internal/asr/pb"
 )
@@ -36,17 +37,24 @@ type grpcStream struct {
 }
 
 // NewGRPCClient creates a new gRPC client for the ASR service.
+// It uses grpc.NewClient (lazy, no I/O): connection errors surface at RPC
+// time, not here. See antipatterns.md.
 func NewGRPCClient(cfg *Config) (GRPCClient, error) {
-	conn, err := grpc.DialContext(
-		context.Background(),
+	conn, err := grpc.NewClient(
 		cfg.GRPCAddress,
-		grpc.WithInsecure(),
-		grpc.WithBlock(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("dial ASR service %s: %w", cfg.GRPCAddress, err)
+		return nil, fmt.Errorf("create ASR client for %s: %w", cfg.GRPCAddress, err)
 	}
 	return &grpcClient{conn: conn, config: cfg}, nil
+}
+
+// NewGRPCClientWithConn wraps an existing *grpc.ClientConn (e.g. a bufconn
+// test connection). It exists so tests can inject a connection without
+// touching unexported types.
+func NewGRPCClientWithConn(conn *grpc.ClientConn, cfg *Config) GRPCClient {
+	return &grpcClient{conn: conn, config: cfg}
 }
 
 // NewStream opens a bidirectional streaming RPC for the given utterance ID.
@@ -81,6 +89,10 @@ func (c *grpcClient) NewStream(ctx context.Context, utteranceID uint64) (Stream,
 	}
 
 	return &grpcStream{client: stream}, nil
+}
+
+func (c *grpcClient) Close() error {
+	return c.conn.Close()
 }
 
 // PushPCM sends a PCM chunk to the streaming ASR service.

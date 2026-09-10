@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/arnav/astra/services/backend/internal/asr"
@@ -52,7 +53,7 @@ var testASRDesc = grpc.ServiceDesc{
 	},
 }
 
-func newBufconnClient(t *testing.T) *asr.grpcClient {
+func newBufconnClient(t *testing.T) asr.GRPCClient {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
@@ -60,17 +61,17 @@ func newBufconnClient(t *testing.T) *asr.grpcClient {
 	go func() { _ = srv.Serve(lis) }()
 	t.Cleanup(srv.Stop)
 
-	conn, err := grpc.Dial("bufnet",
+	conn, err := grpc.NewClient("passthrough:///bufnet",
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			return lis.DialContext(ctx)
 		}),
-		grpc.WithInsecure(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		t.Fatalf("dial bufnet: %v", err)
+		t.Fatalf("create bufnet client: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	return &asr.grpcClient{conn: conn, config: &asr.Config{Model: "small", Language: "en"}}
+	return asr.NewGRPCClientWithConn(conn, &asr.Config{Model: "small", Language: "en"})
 }
 
 func pushWithTimeout(t *testing.T, s asr.Stream, pcm []byte) {
