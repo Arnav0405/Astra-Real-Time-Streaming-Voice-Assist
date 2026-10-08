@@ -1,23 +1,19 @@
 package tts
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"time"
+
+	"github.com/arnav/astra/services/backend/internal/tts/pb"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-const (
-	requestTimeout = 30 * time.Second
-	// chunkBytes is how much PCM is forwarded per ReplyAudio message. It only
-	// sets network granularity — barge-in responsiveness comes from the
-	// client-side buffer flush, not from chunk size — so this is picked to
-	// keep message overhead low, not to be small.
-	chunkBytes = 4096
-)
+const requestTimeout = 30 * time.Second
 
 // Synthesizer turns one span of reply text into streamed PCM. *Client
 // implements it; tests substitute a fake.
@@ -25,85 +21,85 @@ type Synthesizer interface {
 	Speak(ctx context.Context, text string, onPCM func([]byte) error) error
 }
 
-// Client is an OpenAI-compatible streaming speech client. Safe for concurrent
-// use. No retry, for the same reason as llm: a retried sentence arrives after
-// the conversation has moved on.
+// Client synthesizes speech over the astra.v1.TTS gRPC service (local Piper
+// server). Safe for concurrent use. No retry, for the same reason as llm: a
+// retried sentence arrives after the conversation has moved on.
 type Client struct {
 	cfg     Config
-	key     string
+	conn    *grpc.ClientConn
 	timeout time.Duration
 }
 
-// NewClient returns a client for cfg authenticating with apiKey.
-func NewClient(cfg Config, apiKey string) *Client {
-	return &Client{cfg: cfg, key: apiKey, timeout: requestTimeout}
+// NewTTSClient returns a client for cfg. It uses grpc.NewClient (lazy, no
+// I/O): connection errors surface at RPC time, not here. See antipatterns.md.
+func NewTTSClient(cfg Config) (*Client, error) {
+	conn, err := grpc.NewClient(
+		cfg.GRPCAddress,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create TTS client for %s: %w", cfg.GRPCAddress, err)
+	}
+	return &Client{cfg: cfg, conn: conn, timeout: requestTimeout}, nil
+}
+
+// CloseClient closes the underlying gRPC connection. Main defers it at
+// shutdown, mirroring the ASR client.
+func (c *Client) CloseClient() error {
+	return c.conn.Close()
 }
 
 // SampleRateHz is the rate of the PCM Speak produces.
 func (c *Client) SampleRateHz() int { return c.cfg.SampleRateHz }
 
 // Speak synthesizes text and hands PCM to onPCM in arrival order, from the
-// calling goroutine. The buffer passed to onPCM is reused after it returns,
-// so a consumer that keeps it must copy. Returns early if onPCM errors (the
-// client is gone) or ctx is cancelled (barge-in).
+// calling goroutine. The buffer passed to onPCM comes straight off the wire
+// and is not reused by this client, so a consumer that keeps it must copy.
+// Returns early if onPCM errors (the consumer is gone) or ctx is cancelled
+// (barge-in); cancellation also stops the server mid-stream, since the py
+// server checks context.is_active() between chunks.
 func (c *Client) Speak(ctx context.Context, text string, onPCM func([]byte) error) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
-	body, err := json.Marshal(map[string]any{
-		"model":           c.cfg.Model,
-		"voice":           c.cfg.Voice,
-		"input":           text,
-		"response_format": c.cfg.Format,
-	})
+	// Raw-stream form, as in asr: the generated pb package carries only the
+	// message types, not the service stub (go_package points into internal).
+	desc := &grpc.StreamDesc{
+		StreamName:    "Synthesize",
+		ServerStreams: true,
+	}
+	stream, err := grpc.NewClientStream(ctx, desc, c.conn, "/astra.v1.TTS/Synthesize")
 	if err != nil {
-		return err
+		return fmt.Errorf("tts create stream: %w", err)
+	}
+	if err := stream.SendMsg(&pb.SynthesizeRequest{Text: text}); err != nil {
+		stream.CloseSend()
+		return fmt.Errorf("tts send request: %w", err)
+	}
+	if err := stream.CloseSend(); err != nil {
+		return fmt.Errorf("tts close send: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/audio/speech", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return fmt.Errorf("tts http %d: %s", resp.StatusCode, bytes.TrimSpace(b))
-	}
-
-	// s16le: a chunk must never end mid-sample or the client reassembles noise
-	// at the seam. A read that lands on an odd boundary carries its trailing
-	// byte into the next chunk — dropping it instead would byte-shift, and so
-	// destroy, every sample that follows.
-	buf := make([]byte, chunkBytes)
-	carry := 0
 	for {
-		n, err := resp.Body.Read(buf[carry:])
-		total := carry + n
-		emit := total &^ 1 // round down to a whole number of samples
-		if emit > 0 {
-			if cbErr := onPCM(buf[:emit]); cbErr != nil {
-				return cbErr
+		var resp pb.SynthesizeResponse
+		if err := stream.RecvMsg(&resp); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil // server half-closed after the last chunk
 			}
-		}
-		carry = total - emit
-		if carry == 1 {
-			buf[0] = buf[emit]
-		}
-		if err == io.EOF {
-			return nil // a lone trailing byte means a truncated stream; drop it
-		}
-		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
-				return ctxErr
+				return ctxErr // barge-in cancellation, not a TTS failure
 			}
-			return err
+			return fmt.Errorf("tts stream: %w", err)
+		}
+		switch msg := resp.Msg.(type) {
+		case *pb.SynthesizeResponse_AudioStart:
+			// sample_rate_hz rides AudioStart; the caller already wired the
+			// declared cfg rate, so this stays informational.
+			_ = msg.AudioStart.GetSampleRateHz()
+		case *pb.SynthesizeResponse_AudioChunk:
+			if err := onPCM(msg.AudioChunk.GetPcm()); err != nil {
+				return err // consumer gone: stop, drop the rest
+			}
 		}
 	}
 }

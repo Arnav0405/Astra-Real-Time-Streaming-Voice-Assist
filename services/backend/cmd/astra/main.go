@@ -128,9 +128,13 @@ func main() {
 			log.Fatal(err)
 		}
 		llmClient = llm.NewClient(lcfg, key)
-		ttsClient = tts.NewClient(tcfg, key)
-		log.Printf("reply enabled: llm %s, tts %s voice %s @ %d Hz",
-			lcfg.Model, tcfg.Model, tcfg.Voice, tcfg.SampleRateHz)
+		ttsClient, err = tts.NewTTSClient(tcfg)
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer ttsClient.CloseClient()
+		log.Printf("reply enabled: llm %s, tts grpc %s voice %s @ %d Hz",
+			lcfg.Model, tcfg.GRPCAddress, tcfg.Voice, tcfg.SampleRateHz)
 	}
 
 	// onUtterance for a stream: optional WAV dumper (-endpoint-wav-dir), then
