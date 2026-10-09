@@ -199,6 +199,7 @@ func streamPCM(t *testing.T, url string, pcm []byte) {
 		send(&pb.ClientMessage{Msg: &pb.ClientMessage_AudioFrame{AudioFrame: &pb.AudioFrame{
 			Seq: seq, Pcm: pcm[off : off+frameBytes],
 		}}})
+		time.Sleep(framePeriod) // real-time pacing; see framePeriod
 	}
 	send(&pb.ClientMessage{Msg: &pb.ClientMessage_StreamStop{StreamStop: &pb.StreamStop{}}})
 }

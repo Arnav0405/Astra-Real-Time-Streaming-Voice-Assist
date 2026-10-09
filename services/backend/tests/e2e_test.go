@@ -24,6 +24,15 @@ import (
 
 const frameBytes = 640
 
+// framePeriod is one 20 ms audio frame at the wall clock. The mic client
+// (clients/mic/mic_client.py) sends a frame as it is captured; these tests
+// replay the same sequence, so they must pace at the real rate. A test that
+// blasts a whole clip instead overflows the session's frame queue and engages
+// session.pushFrame's keep-the-newest drop policy — meant for a sink that has
+// fallen behind realtime, not for a burst — and the dropped frames shift the
+// golden event indices.
+const framePeriod = 20 * time.Millisecond
+
 func TestEndToEndVad(t *testing.T) {
 	if err := vad.Init(""); err != nil {
 		t.Skipf("onnxruntime unavailable: %v", err)
