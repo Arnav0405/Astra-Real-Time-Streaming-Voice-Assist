@@ -37,6 +37,10 @@ type StreamWorker struct {
 	sendMu sync.Mutex
 	closed bool
 	doneCh chan struct{}
+	// dropped counts frames discarded because the queue was full. Reported at
+	// Close so silent audio loss shows up in the log instead of only in a
+	// wrong transcript.
+	dropped atomic.Uint64
 
 	// Config
 	chunkFrames  int
@@ -161,6 +165,19 @@ func (w *StreamWorker) enqueue(m workerMsg) bool {
 	case w.queue <- m:
 		return true
 	default:
+	}
+	// Full: make room by discarding the oldest queued message. Blocking here
+	// would stall the frame path; dropping the newest would leave the audio the
+	// user is speaking right now untranscribed.
+	select {
+	case <-w.queue:
+		w.dropped.Add(1)
+	default:
+	}
+	select {
+	case w.queue <- m:
+		return true
+	default:
 		return false
 	}
 }
@@ -212,6 +229,10 @@ func (w *StreamWorker) Close() {
 	close(w.queue)
 	w.sendMu.Unlock()
 	<-w.doneCh
+	if n := w.dropped.Load(); n > 0 {
+		log.Printf("stream %s: asr worker closing after dropping %d frames (%.1f s of audio)",
+			w.streamID, n, float64(n)/50)
+	}
 }
 
 // run is the worker's single goroutine. It drains one queue in order, so a

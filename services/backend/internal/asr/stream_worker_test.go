@@ -333,3 +333,54 @@ func TestArmWithUnreachableASRLeavesWorkerDisarmed(t *testing.T) {
 		t.Error("worker armed without a stream")
 	}
 }
+
+// A full queue must discard the OLDEST audio and count it, not refuse the newest
+// frame silently: ASR falling behind is a fact to log, and the audio the user is
+// speaking right now is the audio worth transcribing.
+func TestFullQueueDropsOldestAndCounts(t *testing.T) {
+	w := NewStreamWorker("s", &StreamWorkerConfig{ChunkFrames: 150}, nil)
+
+	for i := 0; i < queueDepth; i++ {
+		if !w.enqueue(workerMsg{kind: msgFrame, seq: uint64(i), pcm: make([]byte, 640)}) {
+			t.Fatalf("queue rejected frame %d before it was full", i)
+		}
+	}
+	newest := uint64(queueDepth)
+	if !w.enqueue(workerMsg{kind: msgFrame, seq: newest, pcm: make([]byte, 640)}) {
+		t.Fatal("enqueue refused the newest frame instead of dropping the oldest")
+	}
+	if got := w.dropped.Load(); got != 1 {
+		t.Errorf("dropped = %d, want 1", got)
+	}
+
+	// The queue kept the newest audio: seq 0 is gone, `newest` is in. Read a
+	// fixed count — the channel is open, so `for range` would block forever.
+	first := <-w.queue
+	if first.seq != 1 {
+		t.Errorf("head of queue = seq %d, want 1 (seq 0 should have been dropped)", first.seq)
+	}
+	var last workerMsg
+	for i := 0; i < queueDepth-1; i++ {
+		last = <-w.queue
+	}
+	if last.seq != newest {
+		t.Errorf("tail of queue = seq %d, want %d", last.seq, newest)
+	}
+}
+
+// The counters are per worker: one stream falling behind must never be reported
+// as another stream's loss.
+func TestDropCountsArePerWorker(t *testing.T) {
+	busy := NewStreamWorker("busy", &StreamWorkerConfig{ChunkFrames: 150}, nil)
+	idle := NewStreamWorker("idle", &StreamWorkerConfig{ChunkFrames: 150}, nil)
+
+	for i := 0; i <= queueDepth; i++ { // one past capacity
+		busy.enqueue(workerMsg{kind: msgFrame, seq: uint64(i), pcm: make([]byte, 640)})
+	}
+	if got := busy.dropped.Load(); got == 0 {
+		t.Fatal("busy worker reported no drops after overflowing its queue")
+	}
+	if got := idle.dropped.Load(); got != 0 {
+		t.Errorf("idle worker reported %d drops from another stream's backlog", got)
+	}
+}
