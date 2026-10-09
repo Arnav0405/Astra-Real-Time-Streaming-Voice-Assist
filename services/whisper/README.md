@@ -6,20 +6,21 @@ backend, cutting ASR round-trip (TTFS) from ~5s to ~0.3s.
 
 ## API
 
-### `POST /audio/transcriptions`
-
-Multipart upload with a `file` field containing WAV bytes:
-
-```sh
-curl -X POST http://localhost:8000/audio/transcriptions -F "file=@recording.wav"
-# -> {"text": "testing one two three four five six"}
-```
-
-Transcription is always forced to English (`language="en"`).
-
-### `GET /health`
+### `GET /health` (HTTP, port 8000)
 
 Liveness probe: `{"status": "ok"}`.
+
+### `astra.v1.ASR/StreamTranscribe` (gRPC, port 50051)
+
+The real surface. The Go backend opens a bidirectional streaming RPC, sends a
+`StreamConfig` followed by raw 16 kHz mono s16le `AudioChunk` frames, and
+receives partial and final `TranscribeResponse` messages. There is no HTTP
+transcription endpoint.
+
+Chunking for the streaming decoder is configured by
+`assets/configs/asr.json` (`chunk_frames`, `overlap_frames`), read by this
+service at startup. The Go backend loads the same repo-root file through its
+`-asr-config` flag.
 
 ## Running
 

@@ -21,8 +21,15 @@ COPY services/whisper/pyproject.toml services/whisper/uv.lock ./
 RUN uv sync --frozen --no-install-project --compile-bytecode
 
 # App layer.
-COPY services/whisper/main.py services/whisper/transcriber.py services/whisper/asr_server.py ./
+COPY services/whisper/main.py services/whisper/transcriber.py \
+     services/whisper/asr_server.py services/whisper/stream_transcriber.py \
+     services/whisper/silence.py ./
 
-EXPOSE 8000
+# Generated gRPC stubs: asr_server imports `astra.v1`, so the package must be in
+# the image too (the host resolves it from the service's own directory).
+COPY services/whisper/astra ./astra/
+
+# 8000 serves /health; 50051 is the gRPC streaming ASR the Go backend dials.
+EXPOSE 8000 50051
 
 CMD ["uv", "run", "--no-sync", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
