@@ -67,11 +67,15 @@ class StreamingTranscriber:
 
         self._buffer = bytearray()
         self._started = False
+        # True once a chunk has been emitted: the buffer's leading
+        # overlap_bytes have then already been transcribed and sent.
+        self._chunk_reported = False
 
     def start(self) -> None:
         """Initialize the transcriber for a new utterance."""
         self._buffer.clear()
         self._started = True
+        self._chunk_reported = False
 
     def push(self, pcm: bytes) -> tuple[str, bool]:
         """Push PCM frames and return partial transcript.
@@ -98,24 +102,31 @@ class StreamingTranscriber:
 
             # Keep overlap for next chunk
             self._buffer = self._buffer[-self.overlap_bytes:]
+            self._chunk_reported = True
 
             return text, False
 
         return "", False
 
     def finalize(self) -> tuple[str, bool]:
-        """Finalize transcription and return final transcript."""
+        """Finalize transcription and return final transcript.
+
+        Only audio pushed after the last chunk boundary is new: the leading
+        overlap_bytes were already reported as a partial. Re-transcribing them
+        makes the final a paraphrase that the Go client appends as if it were
+        new words.
+        """
         if not self._started:
             raise RuntimeError("Transcriber not started. Call start() first.")
 
-        if len(self._buffer) == 0:
-            self._started = False
-            return "", True
+        fresh = bytes(self._buffer)
+        if self._chunk_reported and len(fresh) > self.overlap_bytes:
+            fresh = fresh[self.overlap_bytes:]
 
-        # Transcribe remaining buffer
-        text = self._transcribe_chunk(bytes(self._buffer))
+        text = self._transcribe_chunk(fresh) if fresh else ""
         self._buffer.clear()
         self._started = False
+        self._chunk_reported = False
         return text, True
 
     def _transcribe_chunk(self, pcm: bytes) -> str:
