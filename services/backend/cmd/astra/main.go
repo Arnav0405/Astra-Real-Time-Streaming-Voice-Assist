@@ -231,7 +231,10 @@ func main() {
 				log.Printf("stream %s: stream worker start FAILED (gRPC connection error): %v", streamID, err)
 				streamWorker = nil
 			} else {
-				log.Printf("stream %s: stream worker started, connected to %s", streamID, asrGRPCAddr)
+				// grpc.NewClient is lazy: this says the worker is running, not that
+				// the ASR service is reachable. A failure to reach it shows up per
+				// utterance as "failed to create ASR stream".
+				log.Printf("stream %s: asr worker running (target %s)", streamID, asrGRPCAddr)
 			}
 		}
 
