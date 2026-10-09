@@ -369,3 +369,50 @@ func TestVadOnlyModeArmsOnSpeech(t *testing.T) {
 		t.Fatalf("first span = %q, want vad_detect", got)
 	}
 }
+
+// VAD-only mode arms on speech onset (VadStart), not on Arm — main.go wires
+// Arm only into the wake-word wrapper. Every utterance must still get its own
+// chain with its own marks; without the reset inside VadStart the second
+// utterance of a stream inherits the first one's sentTurn/ttsFirst and emits
+// no Turn at all, so a session was measured once and then silently unmeasured.
+func TestVadOnlySecondUtteranceEmitsItsOwnChain(t *testing.T) {
+	r := New("s1", false)
+	send, got := collect(r)
+
+	feed := func(from, to uint64) {
+		for seq := from; seq <= to; seq++ {
+			r.Frame(seq)
+		}
+	}
+	// utterance 1
+	feed(0, 2)
+	r.VadStart(1)
+	feed(2, 6)
+	r.VadEnd(6)
+	r.Utterance(1)
+	_ = send(transcript(1))
+	_ = send(delta(1))
+	_ = send(audio(1))
+
+	// utterance 2, same stream
+	feed(7, 9)
+	r.VadStart(8)
+	feed(9, 12)
+	r.VadEnd(12)
+	r.Utterance(8)
+	_ = send(transcript(8))
+	_ = send(delta(8))
+	_ = send(audio(8))
+
+	all := turns(*got)
+	if len(all) != 2 {
+		t.Fatalf("want one Turn per utterance, got %d: %v", len(all), all)
+	}
+	if all[1].GetUtteranceId() != 8 {
+		t.Fatalf("second chain uid = %d, want 8", all[1].GetUtteranceId())
+	}
+	want := []string{"vad_detect", "user_speech", "endpoint_tail", "asr", "llm_ttft", "tts_ttfb"}
+	if !eq(spanNames(all[1]), want) {
+		t.Fatalf("second chain spans = %v, want %v", spanNames(all[1]), want)
+	}
+}

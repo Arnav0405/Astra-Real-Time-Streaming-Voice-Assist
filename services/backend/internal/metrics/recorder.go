@@ -121,7 +121,13 @@ func (r *Recorder) VadStart(frame int) {
 	// VAD-only mode arms on speech onset, but only from idle. An onset while a
 	// chain is open and its utterance has not closed yet is a grace reopen,
 	// which continues the chain rather than starting one.
+	//
+	// A genuine new utterance must clear the previous one's marks first: wake
+	// mode gets that from resetTurn inside Arm, and without it here the second
+	// utterance of a stream inherits asrDone/llmFirst/ttsFirst/sentTurn and
+	// emits no Turn at all (observe bails on the non-zero ttsFirst).
 	if r.detectLabel == "vad_detect" && (!r.open || !r.uttrClose.IsZero()) {
+		r.resetTurn()
 		r.open = true
 		r.armAt = r.lastVadStart
 		r.armed = time.Now()
