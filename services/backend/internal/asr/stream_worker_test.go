@@ -2,6 +2,7 @@ package asr
 
 import (
 	"context"
+	"errors"
 	"io"
 	"sync/atomic"
 	"testing"
@@ -163,7 +164,7 @@ func TestBargeInPushesPrerollAsOneChunk(t *testing.T) {
 	w.grpcClient = f
 
 	preroll := make([]byte, 3*640)
-	w.handleControl(controlMsg{cmd: 2, seq: 100, pcm: preroll}, new([]byte), new([]uint64), new(uint64), new(int))
+	w.handleControl(workerMsg{kind: msgBarge, seq: 100, pcm: preroll})
 
 	if len(f.utteranceIDs) != 1 || f.utteranceIDs[0] != 1 {
 		t.Fatalf("utteranceIDs = %v, want [1]", f.utteranceIDs)
@@ -187,10 +188,10 @@ func TestBargeInArmsWorkerForNewFrames(t *testing.T) {
 	w := NewStreamWorker("test-stream", &StreamWorkerConfig{ChunkFrames: 150}, nil)
 	w.grpcClient = f
 
-	w.handleControl(controlMsg{cmd: 2, seq: 100, pcm: make([]byte, 2*640)}, new([]byte), new([]uint64), new(uint64), new(int))
+	w.handleControl(workerMsg{kind: msgBarge, seq: 100, pcm: make([]byte, 2*640)})
 
 	// Frames arriving after the barge-in must reach the new stream.
-	w.handleFrame(frameMsg{seq: 101, pcm: make([]byte, 640)}, new([]byte), new([]uint64), new(uint64), new(int))
+	w.handleFrame(workerMsg{kind: msgFrame, seq: 101, pcm: make([]byte, 640)})
 	s := f.streams[0]
 	if got, want := len(s.pushed), 2; got != want {
 		t.Fatalf("barged stream received %d chunks (preroll + live frames), want %d", got, want)
@@ -201,7 +202,7 @@ func TestBargeInArmsWorkerForNewFrames(t *testing.T) {
 
 	// Closing the utterance must half-close the gRPC stream so the server
 	// finalizes and emits the final transcript.
-	w.handleControl(controlMsg{cmd: 1}, nil, nil, nil, nil)
+	w.handleControl(workerMsg{kind: msgDisarm})
 	if !s.closed.Load() {
 		t.Error("Disarm after barge-in did not half-close the gRPC stream; Whisper would never finalize")
 	}
@@ -278,5 +279,57 @@ func TestRecvLoopStitchesOverlap(t *testing.T) {
 	}
 	if !got[len(got)-1].IsFinal {
 		t.Error("last transcript should be final")
+	}
+}
+
+// Every frame pushed right after Arm must reach the gRPC stream. Arm and the
+// frame behind it travel one ordered queue; with two channels behind a select
+// the frame won the race about half the time and was discarded by the
+// "not armed" check, so utterances lost their opening frames at random.
+func TestArmThenFrameNeverDropsTheFrame(t *testing.T) {
+	const iters = 200
+	for i := 0; i < iters; i++ {
+		f := &fakeGRPCClient{}
+		w := NewStreamWorker("s", &StreamWorkerConfig{ChunkFrames: 150}, nil)
+		w.grpcClient = f
+		w.running.Store(true) // what Start() does, without the real client
+		go w.run()
+
+		w.Arm(0)
+		w.PushFrame(0, make([]byte, 640))
+		w.Close() // drains the queue, so both messages are applied
+
+		if len(f.streams) != 1 {
+			t.Fatalf("iteration %d: %d ASR streams, want 1", i, len(f.streams))
+		}
+		if got := len(f.streams[0].pushed); got != 1 {
+			t.Fatalf("iteration %d: stream received %d chunks after Arm, want 1", i, got)
+		}
+	}
+}
+
+// Guard (passes before and after; pins crash-safety): an unreachable ASR service
+// must leave the worker disarmed and drop frames quietly, not panic or push into
+// a nil stream. Needs `errors` added to the test file's imports.
+type failingGRPCClient struct{}
+
+func (failingGRPCClient) NewStream(context.Context, uint64) (Stream, error) {
+	return nil, errors.New("asr unreachable")
+}
+
+func (failingGRPCClient) CloseClient() error { return nil }
+
+func TestArmWithUnreachableASRLeavesWorkerDisarmed(t *testing.T) {
+	w := NewStreamWorker("s", &StreamWorkerConfig{ChunkFrames: 150}, nil)
+	w.grpcClient = failingGRPCClient{}
+	w.running.Store(true)
+	go w.run()
+
+	w.Arm(0)
+	w.PushFrame(0, make([]byte, 640))
+	w.Close() // drains the queue: Arm and the frame are both processed
+
+	if w.armed.Load() {
+		t.Error("worker armed without a stream")
 	}
 }

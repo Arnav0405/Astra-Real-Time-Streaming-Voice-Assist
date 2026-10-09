@@ -30,24 +30,38 @@ type StreamWorker struct {
 	armed      atomic.Bool
 	graceFrames int
 
-	// Channels
-	frameCh    chan frameMsg
-	controlCh  chan controlMsg
-	doneCh     chan struct{}
+	// queue is the worker's only inbound channel; run() drains it in order.
+	queue chan workerMsg
+	// sendMu guards queue against Close: sending on a closed channel panics,
+	// and the frame path pushes while the session tears the worker down.
+	sendMu sync.Mutex
+	closed bool
+	doneCh chan struct{}
 
 	// Config
 	chunkFrames  int
 	overlapFrames int
 }
 
-type frameMsg struct {
-	seq uint64
-	pcm []byte
-}
+// queueDepth bounds the worker's backlog: 500 frames is 10 s of audio, and a
+// queue that deep already means ASR is not keeping up.
+const queueDepth = 500
 
-type controlMsg struct {
-	// Type: 0=arm, 1=disarm, 2=barge-in
-	cmd  int
+// Message kinds on the worker's single queue.
+const (
+	msgFrame = iota
+	msgArm
+	msgDisarm
+	msgBarge
+)
+
+// workerMsg is one entry on the worker queue: a frame, or a control request.
+// Frames and control share ONE channel so they are applied in enqueue order.
+// Arm and the frame right behind it are both ready at that instant, and a
+// select over two channels picks one at random — which silently discarded the
+// opening frame of about half of all utterances.
+type workerMsg struct {
+	kind int
 	seq  uint64
 	pcm  []byte
 }
@@ -99,8 +113,7 @@ func NewStreamWorker(streamID string, cfg *StreamWorkerConfig, onTranscript func
 		chunkFrames:   cfg.ChunkFrames,
 		overlapFrames: cfg.OverlapFrames,
 		graceFrames:   cfg.GraceFrames,
-		frameCh:       make(chan frameMsg, 500), // ~10 seconds buffer
-		controlCh:     make(chan controlMsg, 10),
+		queue:         make(chan workerMsg, queueDepth),
 		doneCh:        make(chan struct{}),
 	}
 
@@ -136,137 +149,111 @@ func (w *StreamWorker) Start() error {
 	return nil
 }
 
-// PushFrame pushes a frame to the streaming ASR. Call from the frame path.
+// enqueue hands one message to the worker goroutine without blocking. Returns
+// false when the worker is shutting down or the queue is full.
+func (w *StreamWorker) enqueue(m workerMsg) bool {
+	w.sendMu.Lock()
+	defer w.sendMu.Unlock()
+	if w.closed {
+		return false
+	}
+	select {
+	case w.queue <- m:
+		return true
+	default:
+		return false
+	}
+}
+
+// PushFrame pushes a frame to the streaming ASR. Call from the frame path; it
+// never blocks.
 func (w *StreamWorker) PushFrame(seq uint64, pcm []byte) {
 	if !w.running.Load() {
 		return
 	}
-	select {
-	case w.frameCh <- frameMsg{seq: seq, pcm: pcm}:
-	default:
-		// Drop frame if queue full - logging
-		log.Printf("stream %s: stream worker frame queue full, dropping frame %d", w.streamID, seq)
-	}
+	w.enqueue(workerMsg{kind: msgFrame, seq: seq, pcm: pcm})
 }
 
-// Arm arms the worker for a new utterance. Called when VAD detects speech start.
+// Arm arms the worker for a new utterance (VAD speech start, or a wake word).
 func (w *StreamWorker) Arm(seq uint64) {
 	if !w.running.Load() {
 		return
 	}
-	select {
-	case w.controlCh <- controlMsg{cmd: 0, seq: seq}:
-	default:
-	}
+	w.enqueue(workerMsg{kind: msgArm, seq: seq})
 }
 
-// Disarm disarms the worker (end of utterance). Called when VAD detects speech end + grace.
+// Disarm closes the current utterance's stream, which makes the server finalize
+// and emit the final transcript.
 func (w *StreamWorker) Disarm(seq uint64) {
 	if !w.running.Load() {
 		return
 	}
-	select {
-	case w.controlCh <- controlMsg{cmd: 1, seq: seq}:
-	default:
-	}
+	w.enqueue(workerMsg{kind: msgDisarm, seq: seq})
 }
 
-// BargeIn handles a barge-in: disarms current utterance and arms new one with buffered frames.
+// BargeIn closes the current stream and arms a new one seeded with the buffered
+// onset, so the interrupting words are the ones transcribed.
 func (w *StreamWorker) BargeIn(seq uint64, pcm []byte) {
 	if !w.running.Load() {
 		return
 	}
-	select {
-	case w.controlCh <- controlMsg{cmd: 2, seq: seq, pcm: pcm}:
-	default:
-	}
+	w.enqueue(workerMsg{kind: msgBarge, seq: seq, pcm: pcm})
 }
 
-// Close stops the worker and drains in-flight work. Blocks until done.
+// Close stops the worker and drains in-flight work. Blocks until run() has
+// drained the queue. Idempotent, and safe when Start() never ran (nothing was
+// launched, so doneCh is never closed).
 func (w *StreamWorker) Close() {
 	if !w.running.Swap(false) {
-		return // already closed
+		return
 	}
-	close(w.frameCh)
-	close(w.controlCh)
+	w.sendMu.Lock()
+	w.closed = true
+	close(w.queue)
+	w.sendMu.Unlock()
 	<-w.doneCh
 }
 
-// run is the main worker loop.
+// run is the worker's single goroutine. It drains one queue in order, so a
+// control message is always applied before the frames queued behind it.
 func (w *StreamWorker) run() {
 	defer close(w.doneCh)
-
-	var frameBuffer []byte
-	var frameSeqs []uint64
-	var currentStartSeq uint64
-	var frameCount int
-
-	for {
-		select {
-		case f, ok := <-w.frameCh:
-			if !ok {
-				return // closed
-			}
-			w.handleFrame(f, &frameBuffer, &frameSeqs, &currentStartSeq, &frameCount)
-
-		case c, ok := <-w.controlCh:
-			if !ok {
-				return
-			}
-			w.handleControl(c, &frameBuffer, &frameSeqs, &currentStartSeq, &frameCount)
+	for m := range w.queue {
+		switch m.kind {
+		case msgFrame:
+			w.handleFrame(m)
+		default:
+			w.handleControl(m)
 		}
 	}
 }
 
-func (w *StreamWorker) handleFrame(f frameMsg, frameBuffer *[]byte, frameSeqs *[]uint64, currentStartSeq *uint64, frameCount *int) {
+func (w *StreamWorker) handleFrame(m workerMsg) {
 	if !w.armed.Load() {
 		return
 	}
-
-	// Buffer frame locally for potential re-send on barge-in
-	*frameBuffer = append(*frameBuffer, f.pcm...)
-	*frameSeqs = append(*frameSeqs, f.seq)
-	if *frameCount == 0 {
-		*currentStartSeq = f.seq
-	}
-	*frameCount++
-
-	// Send to gRPC stream
 	w.mu.Lock()
 	stream := w.stream
 	w.mu.Unlock()
-
-	if stream != nil {
-		if *frameCount <= 5 || *frameCount%100 == 0 {
-			log.Printf("stream %s: pushing frame %d (total pushed: %d)", w.streamID, f.seq, *frameCount)
-		}
-		if err := stream.PushPCM(f.pcm); err != nil {
-			log.Printf("stream %s: push frame %d error: %v", w.streamID, f.seq, err)
-			// Stream broken - will be handled by receiver
-		}
-	} else {
-		if *frameCount <= 5 {
-			log.Printf("stream %s: NO STREAM to push frame %d", w.streamID, f.seq)
-		}
+	if stream == nil {
+		return // arm is ordered ahead of this frame; the stream arrives first
+	}
+	if err := stream.PushPCM(m.pcm); err != nil {
+		log.Printf("stream %s: push frame %d error: %v", w.streamID, m.seq, err)
 	}
 }
 
-func (w *StreamWorker) handleControl(c controlMsg, frameBuffer *[]byte, frameSeqs *[]uint64, currentStartSeq *uint64, frameCount *int) {
+func (w *StreamWorker) handleControl(m workerMsg) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
-	switch c.cmd {	case 0: // Arm
+	switch m.kind {
+	case msgArm:
 		if w.armed.Load() {
-			// Already armed - might be a pause within grace, continue
 			return
 		}
-		log.Printf("stream %s: arming utterance %d", w.streamID, w.utteranceID+1)
-		w.armed.Store(true)
 		w.utteranceID++
-
-		// Create new gRPC stream for this utterance
-		ctx := context.Background()
-		stream, err := w.grpcClient.NewStream(ctx, w.utteranceID)
+		stream, err := w.grpcClient.NewStream(context.Background(), w.utteranceID)
 		if err != nil {
 			log.Printf("stream %s: failed to create ASR stream: %v", w.streamID, err)
 			w.armed.Store(false)
@@ -275,12 +262,8 @@ func (w *StreamWorker) handleControl(c controlMsg, frameBuffer *[]byte, frameSeq
 		log.Printf("stream %s: gRPC stream created, utteranceID=%d", w.streamID, w.utteranceID)
 		w.stream = stream
 		w.armed.Store(true)
-		resetUtterance(frameBuffer, frameSeqs, frameCount)
-
-		// Start receiver goroutine
-		go w.recvLoop(stream, *currentStartSeq)
-
-	case 1: // Disarm
+		go w.recvLoop(stream, m.seq)
+	case msgDisarm:
 		if !w.armed.Load() {
 			return
 		}
@@ -289,47 +272,27 @@ func (w *StreamWorker) handleControl(c controlMsg, frameBuffer *[]byte, frameSeq
 			w.stream.Close()
 			w.stream = nil
 		}
-
-		// Emit final transcript (will come from recvLoop)
-		// The final transcript is emitted when we receive is_final=true
-
-	case 2: // Barge-in
-		// Close current stream
+	case msgBarge:
 		if w.stream != nil {
 			w.stream.Close()
 			w.stream = nil
 		}
 		w.armed.Store(false)
-
-		// Start new utterance with buffered frames
 		w.utteranceID++
-		ctx := context.Background()
-		stream, err := w.grpcClient.NewStream(ctx, w.utteranceID)
+		stream, err := w.grpcClient.NewStream(context.Background(), w.utteranceID)
 		if err != nil {
 			log.Printf("stream %s: failed to create ASR stream after barge-in: %v", w.streamID, err)
 			return
 		}
 		w.stream = stream
 		w.armed.Store(true)
-		resetUtterance(frameBuffer, frameSeqs, frameCount)
-
-		// The preroll is one concatenated PCM blob: push it as a single chunk.
-		if len(c.pcm) > 0 {
-			if err := stream.PushPCM(c.pcm); err != nil {
+		if len(m.pcm) > 0 {
+			if err := stream.PushPCM(m.pcm); err != nil {
 				log.Printf("stream %s: push barge-in preroll error: %v", w.streamID, err)
 			}
 		}
-
-		go w.recvLoop(stream, c.seq)
+		go w.recvLoop(stream, m.seq)
 	}
-}
-
-// resetUtterance clears the per-utterance frame bookkeeping so counters and
-// buffers restart with each utterance instead of growing across them.
-func resetUtterance(frameBuffer *[]byte, frameSeqs *[]uint64, frameCount *int) {
-	*frameBuffer = (*frameBuffer)[:0]
-	*frameSeqs = (*frameSeqs)[:0]
-	*frameCount = 0
 }
 
 func (w *StreamWorker) recvLoop(stream Stream, startSeq uint64) {
