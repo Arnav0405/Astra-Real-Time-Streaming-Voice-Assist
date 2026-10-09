@@ -5,7 +5,7 @@ package astra.v1;
 option go_package="github.com/arnav/astra/services/backend/internal/tts/pb";
 
 service TTS {
-    rpc Synthesize(SynthesizeRequest) returns (SynthesizeResponse);
+    rpc Synthesize(SynthesizeRequest) returns (stream SynthesizeResponse);
 }
 
 message SynthesizeRequest {

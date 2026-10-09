@@ -12,14 +12,14 @@ class FakeAbort(Exception):
 
 
 class FakeContext:
-    """Minimal gRPC context: active flag + abort capture."""
+    """Minimal gRPC aio context: cancelled flag + abort capture."""
 
     def __init__(self):
-        self.active = True
+        self._cancelled = False
         self.aborted = None
 
-    def is_active(self):
-        return self.active
+    def cancelled(self):
+        return self._cancelled
 
     async def abort(self, code, details=""):
         self.aborted = (code, details)
@@ -70,5 +70,5 @@ async def test_blank_text_aborts_invalid_argument():
 @pytest.mark.asyncio
 async def test_client_cancel_abandons_stream():
     ctx = FakeContext()
-    ctx.active = False  # client already gone before first yield
+    ctx._cancelled = True  # client already gone before first yield
     assert await collect(TTSServicer(FakeSynth()), "hi.", ctx) == []

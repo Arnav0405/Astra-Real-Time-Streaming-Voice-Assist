@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12\x61stra/v1/tts.proto\x12\x08\x61stra.v1\"7\n\x11SynthesizeRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x14\n\x0cutterance_id\x18\x02 \x01(\x04\"x\n\x12SynthesizeResponse\x12+\n\x0b\x61udio_start\x18\x01 \x01(\x0b\x32\x14.astra.v1.AudioStartH\x00\x12.\n\x0b\x61udio_chunk\x18\x02 \x01(\x0b\x32\x17.astra.v1.TtsAudioChunkH\x00\x42\x05\n\x03msg\"$\n\nAudioStart\x12\x16\n\x0esample_rate_hz\x18\x01 \x01(\r\")\n\rTtsAudioChunk\x12\x0b\n\x03pcm\x18\x01 \x01(\x0c\x12\x0b\n\x03seq\x18\x02 \x01(\x04\x32N\n\x03TTS\x12G\n\nSynthesize\x12\x1b.astra.v1.SynthesizeRequest\x1a\x1c.astra.v1.SynthesizeResponseB9Z7github.com/arnav/astra/services/backend/internal/tts/pbb\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x12\x61stra/v1/tts.proto\x12\x08\x61stra.v1\"7\n\x11SynthesizeRequest\x12\x0c\n\x04text\x18\x01 \x01(\t\x12\x14\n\x0cutterance_id\x18\x02 \x01(\x04\"x\n\x12SynthesizeResponse\x12+\n\x0b\x61udio_start\x18\x01 \x01(\x0b\x32\x14.astra.v1.AudioStartH\x00\x12.\n\x0b\x61udio_chunk\x18\x02 \x01(\x0b\x32\x17.astra.v1.TtsAudioChunkH\x00\x42\x05\n\x03msg\"$\n\nAudioStart\x12\x16\n\x0esample_rate_hz\x18\x01 \x01(\r\")\n\rTtsAudioChunk\x12\x0b\n\x03pcm\x18\x01 \x01(\x0c\x12\x0b\n\x03seq\x18\x02 \x01(\x04\x32P\n\x03TTS\x12I\n\nSynthesize\x12\x1b.astra.v1.SynthesizeRequest\x1a\x1c.astra.v1.SynthesizeResponse0\x01\x42\x39Z7github.com/arnav/astra/services/backend/internal/tts/pbb\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -41,5 +41,5 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_TTSAUDIOCHUNK']._serialized_start=249
   _globals['_TTSAUDIOCHUNK']._serialized_end=290
   _globals['_TTS']._serialized_start=292
-  _globals['_TTS']._serialized_end=370
+  _globals['_TTS']._serialized_end=372
 # @@protoc_insertion_point(module_scope)

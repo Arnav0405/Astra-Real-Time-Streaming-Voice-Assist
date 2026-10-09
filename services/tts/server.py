@@ -49,13 +49,13 @@ class TTSServicer(tts_pb2_grpc.TTSServicer):
         pcm, rate = await asyncio.get_running_loop().run_in_executor(
             _executor, self._synth.synthesize, text
         )
-        if not context.is_active():
+        if context.cancelled():
             return  # barge-in: client gone, discard
         yield tts_pb2.SynthesizeResponse(
             audio_start=tts_pb2.AudioStart(sample_rate_hz=rate)
         )
         for seq, i in enumerate(range(0, len(pcm), CHUNK_BYTES)):
-            if not context.is_active():
+            if context.cancelled():
                 return  # barge-in mid-stream: stop immediately
             yield tts_pb2.SynthesizeResponse(
                 audio_chunk=tts_pb2.TtsAudioChunk(pcm=pcm[i : i + CHUNK_BYTES], seq=seq)

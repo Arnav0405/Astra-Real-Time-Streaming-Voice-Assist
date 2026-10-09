@@ -34,7 +34,7 @@ class TTSStub:
         Args:
             channel: A grpc.Channel.
         """
-        self.Synthesize = channel.unary_unary(
+        self.Synthesize = channel.unary_stream(
                 '/astra.v1.TTS/Synthesize',
                 request_serializer=astra_dot_v1_dot_tts__pb2.SynthesizeRequest.SerializeToString,
                 response_deserializer=astra_dot_v1_dot_tts__pb2.SynthesizeResponse.FromString,
@@ -53,7 +53,7 @@ class TTSServicer:
 
 def add_TTSServicer_to_server(servicer, server):
     rpc_method_handlers = {
-            'Synthesize': grpc.unary_unary_rpc_method_handler(
+            'Synthesize': grpc.unary_stream_rpc_method_handler(
                     servicer.Synthesize,
                     request_deserializer=astra_dot_v1_dot_tts__pb2.SynthesizeRequest.FromString,
                     response_serializer=astra_dot_v1_dot_tts__pb2.SynthesizeResponse.SerializeToString,
@@ -80,7 +80,7 @@ class TTS:
             wait_for_ready=None,
             timeout=None,
             metadata=None):
-        return grpc.experimental.unary_unary(
+        return grpc.experimental.unary_stream(
             request,
             target,
             '/astra.v1.TTS/Synthesize',

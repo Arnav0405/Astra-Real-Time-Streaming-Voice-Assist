@@ -270,10 +270,10 @@ const file_astra_v1_tts_proto_rawDesc = "" +
 	"\x0esample_rate_hz\x18\x01 \x01(\rR\fsampleRateHz\"3\n" +
 	"\rTtsAudioChunk\x12\x10\n" +
 	"\x03pcm\x18\x01 \x01(\fR\x03pcm\x12\x10\n" +
-	"\x03seq\x18\x02 \x01(\x04R\x03seq2N\n" +
-	"\x03TTS\x12G\n" +
+	"\x03seq\x18\x02 \x01(\x04R\x03seq2P\n" +
+	"\x03TTS\x12I\n" +
 	"\n" +
-	"Synthesize\x12\x1b.astra.v1.SynthesizeRequest\x1a\x1c.astra.v1.SynthesizeResponseB9Z7github.com/arnav/astra/services/backend/internal/tts/pbb\x06proto3"
+	"Synthesize\x12\x1b.astra.v1.SynthesizeRequest\x1a\x1c.astra.v1.SynthesizeResponse0\x01B9Z7github.com/arnav/astra/services/backend/internal/tts/pbb\x06proto3"
 
 var (
 	file_astra_v1_tts_proto_rawDescOnce sync.Once
