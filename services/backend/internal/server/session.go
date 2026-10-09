@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/coder/websocket"
@@ -22,6 +23,12 @@ const (
 	frameDurationMs = 20
 	frameBytes      = sampleRateHz / 1000 * frameDurationMs * bitsPerSample / 8 // 640
 )
+
+// frameDropGrace is how long the read loop waits for the sink before it starts
+// discarding the oldest queued frame. One frame period: normal scheduler jitter
+// fits inside it, and a sink that cannot keep up does not get to convert its
+// backlog into client-side audio loss.
+const frameDropGrace = frameDurationMs * time.Millisecond
 
 // Violation codes sent in pb.Error before closing.
 const (
@@ -70,6 +77,11 @@ type session struct {
 	frames  chan Frame
 	sink    Sink
 	cancel  context.CancelFunc
+
+	// streamID is reported in teardown logs. dropped counts frames discarded
+	// above (sink behind realtime); only the read loop touches it, so no lock.
+	streamID string
+	dropped  int
 
 	// Every conn.Write goes through the write loop — coder/websocket allows
 	// only one write in flight, and the sink writes replies concurrently with
@@ -164,6 +176,10 @@ func (s *session) run(ctx context.Context) {
 		status, reason = websocket.StatusInternalError, codeInternal
 	}
 
+	if s.dropped > 0 {
+		log.Printf("stream %s: %d frames skipped (sink behind realtime)", s.streamID, s.dropped)
+	}
+
 	close(s.outClosed)
 	<-s.writerDone
 	s.conn.Close(status, reason)
@@ -222,6 +238,7 @@ func (s *session) handleStart(ctx context.Context, start *pb.StreamStart) error 
 	}
 
 	streamID := newStreamID()
+	s.streamID = streamID
 	s.state = streaming
 	s.frames = make(chan Frame, 32)
 	s.sink = s.newSink(streamID, s.send)
@@ -241,6 +258,32 @@ func (s *session) handleStart(ctx context.Context, start *pb.StreamStart) error 
 	})
 }
 
+// pushFrame delivers one frame to the sink, never blocking the read loop for
+// more than frameDropGrace. A real-time pipeline that blocks here does not slow
+// down — it drifts further behind, and the client's own send queue then discards
+// audio where nothing can see it (clients/mic/mic_client.py drops on
+// QueueFull). Discarding the oldest queued frame keeps the pipeline in step with
+// the wall clock; every discard is counted and reported at teardown.
+func (s *session) pushFrame(f Frame) {
+	t := time.NewTimer(frameDropGrace)
+	defer t.Stop()
+	select {
+	case s.frames <- f:
+		return
+	case <-t.C:
+	}
+	select {
+	case <-s.frames:
+		s.dropped++
+	default:
+	}
+	select {
+	case s.frames <- f:
+	default:
+		s.dropped++
+	}
+}
+
 func (s *session) handleFrame(frame *pb.AudioFrame) error {
 	if s.state != streaming {
 		return &protocolError{codeBadState, "AudioFrame before StreamStart"}
@@ -252,7 +295,7 @@ func (s *session) handleFrame(frame *pb.AudioFrame) error {
 		return &protocolError{codeBadSeq, fmt.Sprintf("expected seq %d, got %d", s.nextSeq, frame.Seq)}
 	}
 	s.nextSeq++
-	s.frames <- Frame{Seq: frame.Seq, PCM: frame.Pcm}
+	s.pushFrame(Frame{Seq: frame.Seq, PCM: frame.Pcm})
 	return nil
 }
 

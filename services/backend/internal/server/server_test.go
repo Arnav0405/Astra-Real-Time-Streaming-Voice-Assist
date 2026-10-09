@@ -279,3 +279,73 @@ func TestPlainHTTPRedirectsToApp(t *testing.T) {
 		t.Fatalf("Location = %q, want /app/", loc)
 	}
 }
+
+// slowSink models the real sink when inference cannot keep up. perFrame MUST be
+// slower than frameDropGrace (the session's send deadline): if the sink frees a
+// buffer slot inside the grace window, the session's send succeeds and nothing
+// is ever dropped, so the test would not exercise backpressure at all.
+type slowSink struct {
+	done     chan struct{}
+	perFrame time.Duration
+	frames   []Frame
+}
+
+func (s *slowSink) Run(frames <-chan Frame) {
+	defer close(s.done)
+	for f := range frames {
+		time.Sleep(s.perFrame)
+		s.frames = append(s.frames, f)
+	}
+}
+
+func (s *slowSink) Wait()                  { <-s.done }
+func (s *slowSink) Fatal() <-chan struct{} { return nil }
+func (s *slowSink) Err() error             { return nil }
+
+// A sink slower than realtime must not stall the read loop: the session skips
+// forward, keeps the newest audio, and never reorders or repeats a seq.
+func TestSlowSinkSkipsForwardInsteadOfStalling(t *testing.T) {
+	const n = 120
+	sink := &slowSink{done: make(chan struct{}), perFrame: 30 * time.Millisecond}
+	srv := &Server{NewSink: func(string, Sender) Sink { return sink }}
+	ts := httptest.NewServer(srv)
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(ts.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	send(t, conn, validStart())
+	recv(t, conn) // StreamStarted
+
+	pcm := make([]byte, frameBytes)
+	for seq := uint64(0); seq < n; seq++ {
+		send(t, conn, frameMsg(seq, pcm))
+	}
+	send(t, conn, stopMsg())
+	conn.Close(websocket.StatusNormalClosure, "")
+	sink.Wait()
+
+	if len(sink.frames) == 0 {
+		t.Fatal("sink received nothing")
+	}
+	if sink.frames[0].Seq != 0 {
+		t.Errorf("first delivered seq = %d, want 0 (nothing was queued to drop yet)", sink.frames[0].Seq)
+	}
+	if got := sink.frames[len(sink.frames)-1].Seq; got != n-1 {
+		t.Errorf("last delivered seq = %d, want %d (the newest audio must survive)", got, n-1)
+	}
+	for i := 1; i < len(sink.frames); i++ {
+		if sink.frames[i].Seq <= sink.frames[i-1].Seq {
+			t.Fatalf("seq %d followed %d: the session reordered or duplicated frames",
+				sink.frames[i].Seq, sink.frames[i-1].Seq)
+		}
+	}
+	if len(sink.frames) == n {
+		t.Fatalf("sink kept up with %d frames; the test did not exercise backpressure", n)
+	}
+}
