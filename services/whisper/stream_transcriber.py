@@ -9,6 +9,8 @@ import numpy as np
 import ctranslate2
 from faster_whisper import WhisperModel
 
+from silence import is_silent, trim_trailing_silence
+
 # WHISPER_DEVICE overrides auto-detection ("cuda" | "cpu")
 _device_override = os.environ.get("WHISPER_DEVICE", "").strip().lower()
 
@@ -117,12 +119,15 @@ class StreamingTranscriber:
         return text, True
 
     def _transcribe_chunk(self, pcm: bytes) -> str:
-        """Transcribe a chunk of PCM audio using faster-whisper.
+        """Transcribe PCM, never asking the model about silence.
 
         Accepts raw s16le PCM bytes and converts them directly to a float32
         ndarray, which faster-whisper's transcribe() accepts as input
         without an intermediate WAV/decode step.
         """
+        pcm = trim_trailing_silence(pcm)
+        if is_silent(pcm):
+            return ""
         model = _get_model(self.model_size)
 
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
@@ -132,6 +137,8 @@ class StreamingTranscriber:
             language=self.language,
             condition_on_previous_text=False,  # Each chunk independent
             word_timestamps=False,
+            vad_filter=True,   # crop non-speech inside the window as well
+            temperature=0.0,   # no sampling fallback: it invents words
         )
 
         return " ".join(segment.text.strip() for segment in segments).strip()
