@@ -12,7 +12,7 @@ import (
 
 // Config is the runtime LLM policy, loaded from assets/configs/llm.json.
 type Config struct {
-	BaseURL string `json:"base_url"` // e.g. https://api.naga.ac/v1
+	BaseURL string `json:"base_url"` // e.g. https://opencode.ai/zen/go/v1
 	Model   string `json:"model"`
 	// SystemPrompt shapes the reply for speech: the text is spoken aloud, so
 	// it must stay short and free of markdown the TTS would read out.
@@ -26,6 +26,11 @@ type Config struct {
 	// HistoryMaxTurns limits the number of user/assistant turns to include
 	// in history. Older turns are dropped first.
 	HistoryMaxTurns int `json:"history_max_turns"`
+	// ReasoningEffort is passed through as the provider's reasoning_effort
+	// when set. "none" disables thinking entirely — the only way a reasoning
+	// model answers within MaxTokens instead of burning the budget on
+	// invisible reasoning tokens. Omit for models without a thinking mode.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 // LoadConfig reads and validates the LLM config file.

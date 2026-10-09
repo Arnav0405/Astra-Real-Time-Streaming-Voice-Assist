@@ -53,7 +53,7 @@ func main() {
 	llmConfig := flag.String("llm-config", "../../assets/configs/llm.json", "path to LLM (reply) config")
 	ttsConfig := flag.String("tts-config", "../../assets/configs/tts.json", "path to TTS (speech synthesis) config")
 	noReply := flag.Bool("no-reply", false, "disable the spoken reply (transcribe only, no LLM/TTS/barge-in)")
-	envFile := flag.String("env-file", "../../.env", "path to .env file with NAGA_API_KEY (already-exported env wins)")
+	envFile := flag.String("env-file", "../../.env", "path to .env file with OPENCODE_GO_KEY (already-exported env wins)")
 	webDir := flag.String("web-dir", "../../clients/web", "directory served at /app/ (the browser demo client); empty disables it")
 	verbose := flag.Bool("verbose", false, "log the per-stream pipeline trace (VAD speech/silence, wake, utterance)")
 	flag.Parse()
@@ -83,11 +83,6 @@ func main() {
 	if *noASR {
 		log.Print("asr disabled (-no-asr): utterances will not be transcribed")
 	} else {
-		godotenv.Load(*envFile) // best effort; exported env wins over the file
-		key := os.Getenv("NAGA_API_KEY")
-		if key == "" {
-			log.Fatalf("NAGA_API_KEY not set (checked environment and %s); pass -no-asr to run without transcription", *envFile)
-		}
 		acfg, err := asr.LoadConfig(*asrConfig)
 		if err != nil {
 			log.Fatal(err)
@@ -115,9 +110,9 @@ func main() {
 		log.Print("reply disabled: it needs a transcript, and asr is off")
 	default:
 		godotenv.Load(*envFile)
-		key := os.Getenv("NAGA_API_KEY")
+		key := os.Getenv("OPENCODE_GO_KEY")
 		if key == "" {
-			log.Fatalf("NAGA_API_KEY not set (checked environment and %s); pass -no-reply to run without spoken replies", *envFile)
+			log.Fatalf("OPENCODE_GO_KEY not set (checked environment and %s); pass -no-reply to run without spoken replies", *envFile)
 		}
 		lcfg, err = llm.LoadConfig(*llmConfig)
 		if err != nil {

@@ -41,7 +41,7 @@ Every model boundary is **golden-tested for Python↔Go parity**, per-frame prob
 - **Custom VAD, trained from scratch** — 40-mel → 2×Conv1d → GRU(64) → sigmoid, one frame per step, ONNX (opset 17), mel frontend baked into the graph (PCM in, prob out, no STFT at runtime). Trained on LibriParty + CHiME-Home negatives, SNR augmentation. Held-out test: **AUC 0.982 · F1 0.958 · 96.4% segment recall · 11.6 false alarms/hour · p90 onset latency 320 ms**. Post-processing: hysteresis + debounce, grid-searched over 480 configs under ≥0.95-recall constraint.
 - **Custom wake word "Astraa"** — TTS + real-recording positives, ACAV/adversarial negatives, OpenWakeWord head over frozen frontends, merged into `ww_v1.onnx`. Frozen real-recording test: **recall 0.96 quiet / 0.90 noisy, ~0.9 est. production false-accepts/hour, median latency 0 ms.** VAD-gated in Go with 1 s ring-buffer preroll backfill so the trigger never misses onset.
 - **Utterance endpointing** — per-stream state machine: arms on wake word (or speech onset in VAD-only mode), captures PCM, closes on VAD silence + grace window. Pause shorter than grace doesn't cut the speaker off; false fire shorter than `min_utterance_frames` drops silently. Frame-counted (20 ms/frame), no wall-clock.
-- **Whisper transcription** — closed utterances post to a hosted Whisper API (NagaAI, OpenAI-compatible) as in-memory WAVs. Per-stream worker transcribes serially, in order, never blocks the frame path; failures retry once then drop; stream close drains the queue. Feeds `onTranscript` → reply runner. `-no-asr` runs offline.
+- **Whisper transcription** — closed utterances stream over gRPC to the local faster-whisper service (`services/whisper`). Per-stream worker transcribes in order, never blocks the frame path; failures drop the utterance; stream close drains the queue. Feeds `onTranscript` → reply runner. `-no-asr` runs offline.
 - **Spoken replies, streamed** — closed transcript starts a turn: LLM streams tokens, chunker splits into sentences at terminal punctuation (requires trailing space, so `3.14` stays intact), each sentence synthesized while the next generates. Audio paced ≤300 ms ahead of realtime, so a barge-in `Cancel` isn't stuck behind seconds of buffered audio.
 - **Barge-in** — mic stays live during playback, VAD keeps scoring every frame. Sustained speech for `barge_in_frames` (120 ms default) cancels the turn: in-flight LLM/TTS requests aborted at the body read, `Cancel` tells the client to flush, utterance re-arms seeded from a ring buffer so the interrupting words keep their onset. Cough or echo burst shorter than threshold: ignored. **The preroll is pushed to the ASR stream as one chunk** (a per-byte gRPC message would have exploded the stream), so the words you spoke at the very start of the interruption are transcribed and fed to the new turn.
 - **Streaming partial transcripts** — ASR partials stream live to the browser as they arrive; the backend coalesces overlapping Whisper chunks (word-level suffix/prefix match) so the running transcript grows cleanly without duplication. Partials render dimmed/italic; the final replaces them normally.
@@ -171,7 +171,7 @@ make up       # docker compose up --build
 
 ### Run it — Docker
 
-Nothing to install but Docker. Put `NAGA_API_KEY` in a repo-root `.env` (Compose reads it automatically; the key never enters the image), then:
+Nothing to install but Docker. Put `OPENCODE_GO_KEY` in a repo-root `.env` (Compose reads it automatically; the key never enters the image), then:
 
 ```sh
 docker compose up
@@ -200,7 +200,7 @@ go run ./cmd/astra -verbose
 
 Then open **<http://localhost:8080/app/>**, click Start, say "Astraa", ask something — and talk over the answer to interrupt it. Use **speakers, not headphones**: the echo canceller is the thing being demonstrated.
 
-Replies need `NAGA_API_KEY` in `.env` (see `assets/configs/{asr,llm,tts}.json` for endpoints and models). Without it:
+Replies need `OPENCODE_GO_KEY` in `.env` (see `assets/configs/{asr,llm,tts}.json` for endpoints and models). Without it:
 
 ```sh
 go run ./cmd/astra -verbose -no-reply     # transcribe only

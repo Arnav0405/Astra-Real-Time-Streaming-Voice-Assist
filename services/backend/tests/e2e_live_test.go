@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -111,7 +112,13 @@ func loadWakeFixture(t *testing.T, name, modelPath, fixture string) ([]byte, []i
 // test also covers that wiring.
 func startServer(t *testing.T, modelPath string) (*syncBuffer, string) {
 	t.Helper()
-	bin := filepath.Join(t.TempDir(), "astra")
+	// .exe on Windows: exec runs "astra" by trying PATHEXT extensions, so an
+	// extension-less binary reports "not found in %PATH%" despite existing.
+	binName := "astra"
+	if runtime.GOOS == "windows" {
+		binName = "astra.exe"
+	}
+	bin := filepath.Join(t.TempDir(), binName)
 	build := exec.Command("go", "build", "-o", bin, "./cmd/astra")
 	build.Dir = ".." // services/backend
 	if out, err := build.CombinedOutput(); err != nil {
@@ -125,7 +132,8 @@ func startServer(t *testing.T, modelPath string) (*syncBuffer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// -no-asr: transcription needs NAGA_API_KEY and is not what this asserts.
+	// -no-asr: transcription needs the local whisper service and is not what
+	// this asserts (it also keeps the test independent of any API key).
 	cmd := exec.Command(bin, "-addr", addr, "-verbose", "-no-asr", "-ww-model", abs)
 	cmd.Dir = ".."
 	logs := &syncBuffer{}

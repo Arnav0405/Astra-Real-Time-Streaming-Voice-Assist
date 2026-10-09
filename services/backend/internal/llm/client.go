@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -31,11 +33,27 @@ type Client struct {
 	cfg     Config
 	key     string
 	timeout time.Duration
+	// session is the stable x-opencode-session id sent with every request.
+	// OpenCode Go rejects requests missing it (400 MissingSessionID) and uses
+	// it for routing and prompt caching, so it must not change mid-run.
+	session string
 }
+
+// userAgent identifies the client. OpenCode Go asks callers to name their
+// client rather than send a generic HTTP-library default (Go's would be
+// "Go-http-client/1.1"); other providers ignore the header.
+const userAgent = "astra-voice/1.0"
 
 // NewClient returns a client for cfg authenticating with apiKey.
 func NewClient(cfg Config, apiKey string) *Client {
-	return &Client{cfg: cfg, key: apiKey, timeout: requestTimeout}
+	return &Client{cfg: cfg, key: apiKey, timeout: requestTimeout, session: newSessionID()}
+}
+
+// newSessionID returns a random id stable for the lifetime of the process.
+func newSessionID() string {
+	var b [16]byte
+	rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 type ChatMessage struct {
@@ -57,12 +75,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, onDelta func(string)
 	}
 	msgs = append(msgs, ChatMessage{Role: "user", Content: prompt})
 
-	body, err := json.Marshal(map[string]any{
-		"model":      c.cfg.Model,
-		"messages":   msgs,
-		"max_tokens": c.cfg.MaxTokens,
-		"stream":     true,
-	})
+	body, err := c.requestBody(msgs)
 	if err != nil {
 		return err
 	}
@@ -71,9 +84,7 @@ func (c *Client) Stream(ctx context.Context, prompt string, onDelta func(string)
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	c.setHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -85,6 +96,34 @@ func (c *Client) Stream(ctx context.Context, prompt string, onDelta func(string)
 		return fmt.Errorf("llm http %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 	return parseSSE(ctx, resp.Body, onDelta)
+}
+
+// setHeaders authenticates and identifies a request: the bearer key, the
+// SSE accept, plus OpenCode Go's required session id and a named user agent.
+func (c *Client) setHeaders(req *http.Request) {
+	req.Header.Set("Authorization", "Bearer "+c.key)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("x-opencode-session", c.session)
+	req.Header.Set("User-Agent", userAgent)
+}
+
+// requestBody builds the JSON body shared by both stream paths.
+// ReasoningEffort is included only when configured: mimo-v2.6-flash reasons
+// by default and burns MaxTokens on invisible reasoning_content deltas
+// (finish_reason=length, empty reply), so "none" is what makes the configured
+// token budget mean spoken tokens.
+func (c *Client) requestBody(msgs []ChatMessage) ([]byte, error) {
+	payload := map[string]any{
+		"model":      c.cfg.Model,
+		"messages":   msgs,
+		"max_tokens": c.cfg.MaxTokens,
+		"stream":     true,
+	}
+	if c.cfg.ReasoningEffort != "" {
+		payload["reasoning_effort"] = c.cfg.ReasoningEffort
+	}
+	return json.Marshal(payload)
 }
 
 // StreamWithHistory sends prompt with conversation history and invokes onDelta
@@ -104,12 +143,7 @@ func (c *Client) StreamWithHistory(ctx context.Context, prompt string, history [
 	msgs = append(msgs, truncateHistory(history, c.cfg.HistoryMaxTokens, c.cfg.HistoryMaxTurns)...)
 	msgs = append(msgs, ChatMessage{Role: "user", Content: prompt})
 
-	body, err := json.Marshal(map[string]any{
-		"model":      c.cfg.Model,
-		"messages":   msgs,
-		"max_tokens": c.cfg.MaxTokens,
-		"stream":     true,
-	})
+	body, err := c.requestBody(msgs)
 	if err != nil {
 		return err
 	}
@@ -118,9 +152,7 @@ func (c *Client) StreamWithHistory(ctx context.Context, prompt string, history [
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.key)
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
+	c.setHeaders(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
