@@ -1,6 +1,9 @@
 # Astra ML
 
-Python model development — the offline path of Astra.
+Python model development — the offline path of Astra; trains the VAD and wake
+word from scratch and exports them as ONNX over the Python↔Go boundary. They
+are the core of why this project outgrew its "basic low-latency Go assistant"
+starting brief.
 
 ## Responsibilities
 
@@ -9,7 +12,7 @@ Python model development — the offline path of Astra.
 - Evaluate models against held-out data
 - Export models to ONNX into `../../assets/models/` for the Go runtime
 
-This service never serves traffic. See [docs/architecture.md](../../docs/architecture.md) for boundaries.
+This service never serves traffic. See [docs/superpowers/specs/2026-09-06-local-piper-tts-design.md](../../docs/superpowers/specs/2026-09-06-local-piper-tts-design.md) for the design record and [CONTEXT.md](../../CONTEXT.md) for the glossary.
 
 ## Layout
 

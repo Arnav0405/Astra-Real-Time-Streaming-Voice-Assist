@@ -1,6 +1,6 @@
 # Astra TTS — local Piper voice service
 
-Python gRPC service wrapping [Piper](https://github.com/rhasspy/piper) for fully-local speech synthesis. One `Synthesize` RPC per sentence, PCM streamed back. Design: `docs/superpowers/specs/2026-09-06-local-piper-tts-design.md`.
+Python gRPC service wrapping [Piper](https://github.com/rhasspy/piper) for fully-local speech synthesis. One `Synthesize` RPC per sentence, PCM streamed back. Design: `docs/superpowers/specs/2026-09-06-local-piper-tts-design.md`. This service is the reason remote TTS is out of the loop entirely — no network hop, no free-tier ceiling.
 
 ## API
 
